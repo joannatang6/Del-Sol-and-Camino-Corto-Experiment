@@ -1,0 +1,438 @@
+---
+title: "2019-2020"
+author: "Joanna Tang"
+date: "8/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include = FALSE}
+# Load packages, read in data
+
+library(tidyverse)
+library(janitor)
+library(plotrix)
+
+percent_cover_19_20 <- read_csv("Del_Sol_and_Camino_Corto_Permanent_Quadrats_2019_2020.csv")
+
+```
+
+## Lab Meeting 8/13
+# Visualization of thatch cover, bare ground, total native and nonnative percent cover, native richness
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Clean up data
+pc_19_20 <- percent_cover_19_20 %>% 
+  clean_names() %>% 
+  select(pool_id, zone, quadrat_id, quadrat_notes, percent_bare_ground, percent_thatch, thatch_depth, native_species_richness, sum_of_native_cover, nonnative_species_richness, sum_of_nonnative_cover, sum_of_all_cover, year, treatment, seeded, native_status, species, percent_cover) %>% 
+  mutate(treatment = replace(treatment, treatment == 1, "Thatch Removal")) %>% 
+  mutate(treatment = replace(treatment, treatment == 2, "Thatch Disturbance")) %>% 
+  mutate(treatment = replace(treatment, treatment == 3, "Control")) %>% 
+  mutate(seeded = replace(seeded, seeded == 1, "Native Seed Addition")) %>% 
+  mutate(seeded = replace(seeded, seeded == 0, "No Seed Addition"))
+
+# Summarize richness, thatch percent cover, thatch depth, bare ground per year & treatment
+richness_thatch_bg_19_20 <- pc_19_20 %>% 
+  group_by(year, treatment) %>% 
+  summarize(mean_native_richness = mean(native_species_richness),
+            se_native_richness = std.error(native_species_richness),
+            mean_nonnative_richness = mean(nonnative_species_richness),
+            se_nonnative_richness = std.error(nonnative_species_richness),
+            mean_thatch_pc = mean(percent_thatch),
+            se_thatch_pc = std.error(percent_thatch),
+            mean_thatch_depth = mean(thatch_depth),
+            se_thatch_depth = std.error(thatch_depth),
+            mean_bare_ground = mean(percent_bare_ground),
+            se_bare_ground = std.error(percent_bare_ground))
+
+# Column graph of mean percent thatch
+thatch_pc_19_20_col <- richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_thatch_pc), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean_thatch_pc, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean_thatch_pc-se_thatch_pc, ymax = mean_thatch_pc+se_thatch_pc), width = .3, position = position_dodge2()) + 
+  labs(title = "Thatch cover after first year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "Thatch removal caused a decrease in thatch") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+thatch_pc_19_20_col
+
+# Column graph of mean thatch depth
+thatch_depth_19_20_col <- richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_thatch_depth), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean_thatch_depth, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean_thatch_depth-se_thatch_depth, ymax = mean_thatch_depth+se_thatch_depth), width = .3, position = position_dodge2()) + 
+  labs(title = "Thatch depth after first year of treatments", x = "Treatment", y = "Mean Richness", caption = "Thatch removal caused a decrease in thatch depth") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+thatch_depth_19_20_col
+
+# Column graph of mean bare ground
+bare_ground_pc_19_20_col <- richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_bare_ground), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean_bare_ground, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean_bare_ground-se_bare_ground, ymax = mean_bare_ground+se_bare_ground), width = .3, position = position_dodge2()) + 
+  labs(title = "Bare ground after first year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "Thatch removal caused an increase in bare ground") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+bare_ground_pc_19_20_col
+
+
+
+
+
+# Summarize species percent cover per year & treatment
+pc_totals_19_20 <- pc_19_20 %>% 
+  group_by(pool_id, zone, quadrat_id, percent_bare_ground, percent_thatch, thatch_depth, native_species_richness, nonnative_species_richness, year, treatment, seeded, native_status) %>% 
+  summarize(total_cover = sum(percent_cover)) %>% 
+  group_by(year, treatment, native_status) %>% 
+  summarize(mean = mean(total_cover),
+            se = std.error(total_cover))
+
+# Column graph of total native and nonnative percent cover
+pc_totals_19_20_col <- pc_totals_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = .3, position = position_dodge2()) + 
+  facet_wrap(~native_status) +
+  labs(title = "Total native and nonnative cover after first year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "Thatch removal caused a decrease in nonnative cover") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+pc_totals_19_20_col
+
+# Column graph of nonnative percent cover
+nonnative_pc_19_20_col <- pc_totals_19_20 %>%
+  filter(native_status == "native") %>% 
+  ggplot(aes(x = treatment, y = mean), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = .3, position = position_dodge2()) + 
+  labs(title = "Nonnative percent cover after first year of treatments", x = "Treatment", y = "Change in Percent Cover (%)", caption = "Thatch removal caused a decrease in nonnative cover, but not sig diff (ANOVA p = 0.0971, F = 2.364)") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year") +
+  theme_classic(base_size = 22)
+nonnative_pc_19_20_col
+
+
+# Column graph of total native and nonnative percent cover per year & treatment & seeding
+seeded_pc_totals_19_20_col <- pc_19_20 %>% 
+  group_by(pool_id, zone, quadrat_id, percent_bare_ground, percent_thatch, thatch_depth, native_species_richness, nonnative_species_richness, year, treatment, seeded, native_status) %>% 
+  summarize(total_cover = sum(percent_cover)) %>% 
+  group_by(year, treatment, seeded, native_status) %>% 
+  summarize(mean = mean(total_cover),
+            se = std.error(total_cover)) %>% 
+  ggplot(aes(x = treatment, y = mean), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean-se, ymax = mean+se), width = .3, position = position_dodge2()) + 
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Total native and nonnative cover after first year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "Thatch removal caused a decrease in nonnative cover, regardless of seeding") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year") +
+  theme(axis.text.x = element_text(angle = 90))
+#seeded_pc_totals_19_20_col
+
+
+
+
+
+# Column graph of mean native richness
+native_richness_19_20_col <- richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_native_richness), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean_native_richness, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean_native_richness-se_native_richness, ymax = mean_native_richness+se_native_richness), width = .3, position = position_dodge2()) + 
+  labs(title = "Native species richness after first year of treatments", x = "Treatment", y = "Mean Richness", caption = "Higher native species richness in thatch removal plots") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+native_richness_19_20_col
+
+# Column graph of mean native richness, seeded vs. unseeded
+seeded_native_richness_19_20_col <- pc_19_20 %>% 
+  group_by(year, treatment, seeded) %>% 
+  summarize(mean_native_richness = mean(native_species_richness),
+            se_native_richness = std.error(native_species_richness)) %>% 
+  ggplot(aes(x = treatment, y = mean_native_richness), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean_native_richness, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean_native_richness-se_native_richness, ymax = mean_native_richness+se_native_richness), width = .3, position = position_dodge2()) + 
+  facet_wrap(~seeded) +
+  labs(title = "Native species richness after first year of treatments", x = "Treatment", y = "Richness", caption = "Seed addition increased native species richness, especially in thatch removal plots") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+seeded_native_richness_19_20_col
+
+# Column graph of mean nonnative richness
+nonnative_richness_19_20_col <- richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_native_richness), stat = "identity", group = as.factor(year)) +
+  geom_col(aes(y = mean_nonnative_richness, fill = as.factor(year)), position = "dodge", width = .4) +
+  geom_errorbar(aes(ymin = mean_nonnative_richness-se_nonnative_richness, ymax = mean_nonnative_richness+se_nonnative_richness), width = .3, position = position_dodge2()) + 
+  labs(title = "Nonnative species richness after first year of treatments", x = "Treatment", y = "Mean Richness") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue"), name = "Year")
+#nonnative_richness_19_20_col
+
+
+```
+
+# Visualization using change in percent cover/richness
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Summarize change in richness, thatch percent cover, thatch depth, bare ground per year & treatment
+
+## Dataframe of just 2019 richness, thatch, bg
+richness_thatch_bg_19 <- pc_19_20 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth, native_species_richness, nonnative_species_richness, year, treatment, seeded) %>% 
+  filter(year == 2019) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_19 = "percent_bare_ground",
+         percent_thatch_19 = "percent_thatch",
+         thatch_depth_19 = "thatch_depth",
+         native_species_richness_19 = "native_species_richness",
+         nonnative_species_richness_19 = "nonnative_species_richness") %>% 
+  select(-year)
+
+## Dataframe of just 2020 richness, thatch, bg
+richness_thatch_bg_20 <- pc_19_20 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth, native_species_richness, nonnative_species_richness, year, treatment, seeded) %>% 
+  filter(year == 2020) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_20 = "percent_bare_ground",
+         percent_thatch_20 = "percent_thatch",
+         thatch_depth_20 = "thatch_depth",
+         native_species_richness_20 = "native_species_richness",
+         nonnative_species_richness_20 = "nonnative_species_richness") %>% 
+  select(-year)
+
+## Dataframe of change in richness, thatch percent cover, thatch depth, bare ground per year & treatment
+change_richness_thatch_bg_19_20 <- richness_thatch_bg_19 %>% 
+  full_join(richness_thatch_bg_20) %>% 
+  mutate(change_bg = percent_bare_ground_20-percent_bare_ground_19,
+         change_thatch_pc = percent_thatch_20-percent_thatch_19,
+         change_thatch_depth = thatch_depth_20-thatch_depth_19,
+         change_native_richness = native_species_richness_20-native_species_richness_19,
+         change_nonnative_richness = nonnative_species_richness_20-nonnative_species_richness_19) %>%
+  group_by(treatment) %>% 
+  drop_na() %>% 
+  summarize(mean_change_native_richness = mean(change_native_richness),
+            se_native_richness = std.error(change_native_richness),
+            mean_change_nonnative_richness = mean(change_nonnative_richness),
+            se_nonnative_richness = std.error(change_nonnative_richness),
+            mean_change_thatch_pc = mean(change_thatch_pc),
+            se_thatch_pc = std.error(change_thatch_pc),
+            mean_change_thatch_depth = mean(change_thatch_depth),
+            se_thatch_depth = std.error(change_thatch_depth),
+            mean_change_bg = mean(change_bg),
+            se_bg = std.error(change_bg))
+
+## Dataframe of change in richness, thatch percent cover, thatch depth, bare ground per year & treatment & seeded
+change_richness_thatch_bg_seeded_19_20 <- richness_thatch_bg_19 %>% 
+  full_join(richness_thatch_bg_20) %>% 
+  mutate(change_bg = percent_bare_ground_20-percent_bare_ground_19,
+         change_thatch_pc = percent_thatch_20-percent_thatch_19,
+         change_thatch_depth = thatch_depth_20-thatch_depth_19,
+         change_native_richness = native_species_richness_20-native_species_richness_19,
+         change_nonnative_richness = nonnative_species_richness_20-nonnative_species_richness_19) %>%
+  group_by(treatment, seeded) %>% 
+  drop_na() %>% 
+  summarize(mean_change_native_richness = mean(change_native_richness),
+            se_native_richness = std.error(change_native_richness),
+            mean_change_nonnative_richness = mean(change_nonnative_richness),
+            se_nonnative_richness = std.error(change_nonnative_richness),
+            mean_change_thatch_pc = mean(change_thatch_pc),
+            se_thatch_pc = std.error(change_thatch_pc),
+            mean_change_thatch_depth = mean(change_thatch_depth),
+            se_thatch_depth = std.error(change_thatch_depth),
+            mean_change_bg = mean(change_bg),
+            se_bg = std.error(change_bg))
+
+
+# Dataframe of just 2019 species percent cover per year & treatment
+pc_totals_19 <- pc_19_20 %>% 
+    filter(year == 2019) %>% 
+  group_by(quadrat_id, treatment, native_status) %>% 
+  summarize(total_cover_19 = sum(percent_cover))
+
+# Dataframe of just 2020 species percent cover per year & treatment
+pc_totals_20 <- pc_19_20 %>% 
+    filter(year == 2020) %>% 
+  group_by(quadrat_id, treatment, native_status) %>% 
+  summarize(total_cover_20 = sum(percent_cover))
+
+## Dataframe of change in richness, thatch percent cover, thatch depth, bare ground per year & treatment
+change_pc_19_20 <- pc_totals_19 %>% 
+  full_join(pc_totals_20) %>% 
+  mutate(change_pc = total_cover_20-total_cover_19) %>%
+  drop_na() %>% 
+  group_by(treatment, native_status) %>% 
+  summarize(mean_change_pc = mean(change_pc),
+            se_change_pc = std.error(change_pc))
+
+# Column graph of change in bare ground
+change_bg_19_20_col <- change_richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_change_bg), stat = "identity", group = as.factor(year)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = mean_change_bg-se_bg, ymax = mean_change_bg+se_bg), width = .3, position = position_dodge2()) + 
+  labs(title = "Bare ground after first year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "Thatch removal caused an increase in bare ground") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic()
+change_bg_19_20_col
+
+# Exploratory graphs of change in thatch
+change_thatch_richness_bg_df <- richness_thatch_bg_19 %>% 
+  full_join(richness_thatch_bg_20) %>% 
+  mutate(change_bg = percent_bare_ground_20-percent_bare_ground_19,
+         change_thatch_pc = percent_thatch_20-percent_thatch_19,
+         change_thatch_depth = thatch_depth_20-thatch_depth_19,
+         change_native_richness = native_species_richness_20-native_species_richness_19,
+         change_nonnative_richness = nonnative_species_richness_20-nonnative_species_richness_19)
+change_thatch_hist <- change_thatch_richness_bg_df %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_thatch_pc))
+## pretty normal
+change_thatch_qq <- change_thatch_richness_bg_df %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_thatch_pc))
+##pretty normal
+
+# Column graph of change in thatch pc
+change_thatch_pc_19_20_col <- change_richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_change_thatch_pc), stat = "identity", group = as.factor(year)) +
+  geom_col(fill = "darkgoldenrod4") +
+  geom_errorbar(aes(ymin = mean_change_thatch_pc-se_thatch_pc, ymax = mean_change_thatch_pc+se_thatch_pc), width = .3, position = position_dodge2()) + 
+  labs(title = "Change in thatch cover after first year of treatments", x = "Treatment", y = "Change in Percent Cover (%)", caption = "Thatch removal caused a decrease in thatch (ANOVA p < 0.01)", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22)
+change_thatch_pc_19_20_col
+
+##ANOVA
+change_thatch_pc_19_20_anova <- aov(change_thatch_pc ~ treatment, data = change_thatch_richness_bg_df)
+#summary(change_thatch_pc_19_20_anova)
+#p << .001, F-value = 106.8
+##Tukey's post-hoc
+change_thatch_pc_19_20_tukey <- TukeyHSD(change_thatch_pc_19_20_anova)
+#disturbance-control p = .613, removal-control p << .001, removal-disturbance p << .001
+
+# Column graph of change in thatch depth
+change_thatch_depth_19_20_col <- change_richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_change_thatch_depth), stat = "identity", group = as.factor(year)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = mean_change_thatch_depth-se_thatch_depth, ymax = mean_change_thatch_depth+se_thatch_depth), width = .3, position = position_dodge2()) + 
+  labs(title = "Thatch depth after first year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "Thatch removal caused a decrease in thatch") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic()
+change_thatch_depth_19_20_col
+
+
+# Exploratory graphs of change in native pc
+change_native_pc_df <- pc_totals_19 %>% 
+  full_join(pc_totals_20) %>% 
+  mutate(change_pc = total_cover_20-total_cover_19) %>%
+  drop_na() %>% 
+  filter(native_status == "native")
+change_native_pc_hist <- change_native_pc_df %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_pc))
+##skewed left
+change_native_pc_qq <- change_native_pc_df %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_pc))
+##skewed left
+
+# Exploratory graphs of change in nonnative pc
+change_nonnative_pc_df <- pc_totals_19 %>% 
+  full_join(pc_totals_20) %>% 
+  mutate(change_pc = total_cover_20-total_cover_19) %>%
+  drop_na() %>% 
+  filter(native_status == "nonnative")
+change_nonnative_pc_hist <- change_nonnative_pc_df %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_pc))
+##pretty normal
+change_nonnative_pc_qq <- change_nonnative_pc_df %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_pc))
+##pretty normal
+
+# Column graph of change in percent cover
+change_pc_19_20_col <- change_pc_19_20 %>%
+  ggplot(aes(x = treatment, y = mean_change_pc)) +
+  geom_col(aes(fill = native_status), position = "dodge", width = .3, binwidth = 0) +
+  geom_errorbar(aes(ymin = mean_change_pc-se_change_pc, ymax = mean_change_pc+se_change_pc), width = .3, position = position_dodge2(width = 1)) + 
+  labs(title = "Change in percent cover after first year of treatments", x = "Treatment", y = "Change in Percent Cover (%)", caption = "Thatch removal caused a decrease in nonnative cover, but not sig diff (ANOVA p = 0.0971, F = 2.364) \n Native cover not sig diff (K-W p = 0.8952)") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(name = "Native Status", values = c("chartreuse4", "firebrick4")) +
+  theme_classic(base_size = 22)
+change_pc_19_20_col
+
+##Kruska-Wallis for native pc
+change_native_pc_kw <- kruskal.test(as.factor(change_pc) ~ as.factor(treatment), data = change_native_pc_df)
+#p = .8952, chi-squared = .22133
+##ANOVA for noonnative pc
+change_nonnative_pc_aov <- aov(change_pc ~ treatment, data = change_nonnative_pc_df)
+#summary(change_nonnative_pc_aov)
+#p = .0971, F-value = 2.364
+#### Tukey's post-hoc
+change_nonnative_pc_tukey <- TukeyHSD(change_nonnative_pc_aov)
+#disturbance-control p = 0.9248295, removal-control p = 0.1038945, removal-disturbance p = 0.2252864
+
+# Column graph of change in nonnative percent cover
+change_nonnative_pc_19_20_col <- change_pc_19_20 %>%
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = treatment, y = mean_change_pc)) +
+  geom_col(fill = "firebrick4", width = .5) +
+  geom_errorbar(aes(ymin = mean_change_pc-se_change_pc, ymax = mean_change_pc+se_change_pc), width = .3) + 
+  labs(title = "Change in nonnative percent cover after first year of treatments", x = "Treatment", y = "Change in Percent Cover (%)", caption = "Thatch removal caused a decrease in nonnative cover, but not sig diff (ANOVA p = 0.0971, F = 2.364)") +
+  scale_y_continuous(expand = c(0,0), limits = c(-49, 0)) +
+  theme_classic(base_size = 22)
+change_nonnative_pc_19_20_col
+
+
+
+
+
+
+# Exploratory graphs of change in native richness
+change_native_richness_hist <- change_thatch_richness_bg_df %>%
+  ggplot() +
+  geom_histogram(aes(x = change_native_richness))
+## pretty normal
+change_native_richness_qq <- change_thatch_richness_bg_df %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_native_richness))
+##pretty normal
+
+# Column graph of change in native richness
+change_native_richness_19_20_col <- change_richness_thatch_bg_seeded_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_change_native_richness), stat = "identity", group = as.factor(year)) +
+  geom_col(fill = "chartreuse4") +
+  geom_errorbar(aes(ymin = mean_change_native_richness-se_native_richness, ymax = mean_change_native_richness+se_native_richness), width = .3, position = position_dodge2()) + 
+  facet_wrap(~seeded) +
+  labs(title = "Native richness after first year of treatments", x = "Treatment", y = "Change in richness", caption = "Thatch removal caused an increase in native species richness in thatch removal (ANOVA p = 0.19; \n only Grindelia camporum germinated)") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22)
+change_native_richness_19_20_col
+
+##ANOVA
+change_native_richness_19_20_anova <- aov(change_native_richness ~ seeded, data = change_thatch_richness_bg_df)
+#summary(change_native_richness_19_20_anova)
+#p = .19, F-value = 1.729
+
+
+
+# Column graph of change in nonnative richness
+change_nonnative_richness_19_20_col <- change_richness_thatch_bg_19_20 %>% 
+  ggplot(aes(x = treatment, y = mean_change_nonnative_richness), stat = "identity", group = as.factor(year)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = mean_change_nonnative_richness-se_nonnative_richness, ymax = mean_change_nonnative_richness+se_nonnative_richness), width = .3, position = position_dodge2()) + 
+  labs(title = "Nonnative richness after first year of treatments", x = "Treatment", y = "Change in richness", caption = "Thatch removal caused an increase in nonnative species richness -- Erigeron bonariensis, Hypochaeris glabra, Spergularia sp. found in 2020") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic()
+change_nonnative_richness_19_20_col
+
+```
+

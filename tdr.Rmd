@@ -1,0 +1,172 @@
+---
+title: "TDR"
+author: "Joanna Tang"
+date: '2022-09-14'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include = FALSE}
+# Load packages, read in data
+
+library(tidyverse)
+library(janitor)
+library(plotrix)
+library(FSA)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(knitr)
+library(sjPlot)
+library(lubridate)
+
+tdr_master <- read_csv("tdr.csv", col_types = cols("Pool ID" = col_character())) %>% clean_names()
+percent_cover_19_21_master <- read_csv("Del_Sol_and_Camino_Corto_Permanent_Quadrats_2019_2021.csv", col_types = cols("Pool ID" = col_character())) %>% clean_names()
+
+
+```
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# Organize data
+
+# Calculate average % soil moisture and KA per quadrat per month
+tdr <- tdr_master %>% 
+  filter(soil_moisture_percent != "Out of range") %>% 
+  drop_na(location) %>% 
+  mutate(soil_moisture_percent = as.numeric(soil_moisture_percent)) %>% 
+  mutate(ka = as.numeric(ka)) %>% 
+  separate(date, sep = "/", into = c("month", "day", "year")) %>% 
+  group_by(month, location, pool_id, quadrat_id) %>% 
+  summarize(avg_percent = mean(soil_moisture_percent),
+            avg_ka = mean(ka))
+tdr$quadrat_id <- gsub('\\s+', '', tdr$quadrat_id)
+
+# Exploratory graphs
+tdr_hist <- ggplot(tdr) +
+  geom_histogram(aes(x = avg_percent)) +
+  facet_wrap(~month)
+#normal each month
+tdr_qq <- ggplot(tdr) +
+  geom_qq(aes(sample = avg_percent)) +
+  facet_wrap(~month)
+#normalish by month
+tdr_month <- ggplot(tdr) +
+  geom_point(aes(x = month, y = avg_percent, color = location))
+
+# Categorize quadrats as native-dominated or nonnative-dominated, join to TDR data
+tdr_veg_df <- percent_cover_19_21_master %>% 
+  filter(year == 2021) %>% 
+  group_by(zone, quadrat_id, native_status) %>%
+  summarize(total_pc = sum(percent_cover)) %>% 
+  pivot_wider(names_from = native_status, values_from = total_pc) %>% 
+  mutate_all(funs(replace_na(.,1))) %>% 
+  mutate(ratio = native/nonnative) %>% 
+  mutate(dominant = if_else(ratio>=1, "native-dominated", "nonnative-dominated")) %>% 
+  full_join(tdr) %>% 
+  mutate(dominant = if_else(is.na(dominant), "nonnative-dominated", dominant)) %>% 
+  mutate(location = if_else(location == "Ellwood", "Ellwood", "Del Sol/Camino Corto"))
+tdr_veg_df$zone[tdr_veg_df$quadrat_id == "RE1"] <- "edge"
+tdr_veg_df$zone[tdr_veg_df$quadrat_id == "RE2"] <- "edge"
+tdr_veg_df$zone[tdr_veg_df$quadrat_id == "RT1"] <- "transition"
+tdr_veg_df$zone[tdr_veg_df$quadrat_id == "RT2"] <- "transition"
+
+```
+
+```{r  echo = FALSE, warning = FALSE, message = FALSE}
+# Organize data per site, per month
+
+# Dataframe of means and se per site, per month
+tdr_mean_site <- tdr_veg_df %>% 
+  group_by(location, month) %>% 
+  summarize(mean_percent = mean(avg_percent),
+            se_percent = std.error(avg_percent)) %>% 
+  drop_na(location)
+
+# Column graph of Ellwood vs. DS/CC
+site_percent_col <- ggplot(tdr_mean_site) +
+  geom_col(aes(x = month, y = mean_percent, fill = location), position = position_dodge2(), width = .3) +
+  geom_errorbar(aes(x = month, ymin = mean_percent-se_percent, ymax = mean_percent+se_percent), width = .3, position = position_dodge2()) + 
+  labs(title = "Percent soil moisture", x = "Month", y = "Soil Moisture (%)", caption = "Ellwood vs. DS/CC sig diff each month", size = 5) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  theme_classic() +
+  scale_fill_manual(values = c("darkgreen", "grey"), name = "Site") +
+  scale_x_discrete(labels = c("February", "March", "April"))
+site_percent_col
+
+## ANOVA of percent moisture, by site, by month
+site_percent_anova <- aov(avg_percent ~ location*month, data = tdr_veg_df)
+#summary(percent_site_anova)
+#p < .06
+### Tukey's post-hoc, by treatment
+site_percent_tukey <- TukeyHSD(site_percent_anova)
+#Ellwood vs. DS/CC sig diff each month
+```
+
+```{r  echo = FALSE, warning = FALSE, message = FALSE}
+# Organize data per dominance, per month
+
+# Dataframe of means and se per dominance, per month
+tdr_mean_dominant <- tdr_veg_df %>% 
+  group_by(dominant, month, location) %>% 
+  summarize(mean_percent = mean(avg_percent),
+            se_percent = std.error(avg_percent)) %>% 
+  drop_na(month)
+
+# Column graph of native-dominant vs. nonnative-dominant
+dominant_percent_col <- ggplot(tdr_mean_dominant) +
+  geom_col(aes(x = month, y = mean_percent, fill = dominant), position = position_dodge2(), width = .3) +
+  geom_errorbar(aes(x = month, ymin = mean_percent-se_percent, ymax = mean_percent+se_percent), width = .3, position = position_dodge2()) + 
+  facet_wrap(~location) +
+  labs(title = "Percent soil moisture", x = "Month", y = "Soil Moisture (%)", caption = "months different, but not dominance", size = 5) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  theme_classic() +
+  scale_fill_manual(values = c("darkgreen", "firebrick4"), name = "Dominant Vegetation") +
+  scale_x_discrete(labels = c("February", "March", "April"))
+dominant_percent_col
+
+## ANOVA of percent moisture, by dominance, by month
+dominant_percent_anova <- tdr_veg_df %>% 
+  filter(location != "Ellwood") %>% 
+  aov(avg_percent ~ dominant*month, data = .)
+#summary(dominant_percent_anova)
+### Tukey's post-hoc, by treatment
+dominant_percent_tukey <- TukeyHSD(dominant_percent_anova)
+#months different, but not dominance
+```
+
+
+
+```{r  echo = FALSE, warning = FALSE, message = FALSE}
+# Organize data per zone, per month
+
+# Dataframe of means and se per zone, per month
+tdr_mean_zone <- tdr_veg_df %>% 
+  group_by(zone, month, location) %>% 
+  summarize(mean_percent = mean(avg_percent),
+            se_percent = std.error(avg_percent)) %>% 
+  drop_na(month)
+
+# Column graph of transition vs. edge zones
+zone_percent_col <- ggplot(tdr_mean_zone) +
+  geom_col(aes(x = month, y = mean_percent, fill = zone), position = position_dodge2(), width = .3) +
+  geom_errorbar(aes(x = month, ymin = mean_percent-se_percent, ymax = mean_percent+se_percent), width = .3, position = position_dodge2()) + 
+  facet_wrap(~location) +
+  labs(title = "Percent soil moisture", x = "Month", y = "Soil Moisture (%)", caption = "DS/CC: 2 t/e sig diff, 3 t/e sig diff, 4 t/e not diff \n Ellwood: months different, but not zones", size = 5) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  theme_classic() +
+  scale_fill_manual(values = c("tan", "darkgreen"), name = "Zone") +
+  scale_x_discrete(labels = c("February", "March", "April"))
+zone_percent_col
+
+## ANOVA of percent moisture, by dominance, by month
+zone_percent_anova <- aov(avg_percent ~ zone*month*location, data = tdr_veg_df)
+#summary(zone_percent_anova)
+### Tukey's post-hoc, by treatment
+zone_percent_tukey <- TukeyHSD(zone_percent_anova)
+#DS/CC: 2 t/e sig diff, 3 t/e sig diff, 4 t/e not diff
+#Ellwood: t/e not diff any year
+```

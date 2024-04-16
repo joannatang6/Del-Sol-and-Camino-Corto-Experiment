@@ -1,0 +1,2178 @@
+---
+title: "2019-2023"
+author: "Joanna Tang"
+date: '2023-07-31'
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include = FALSE}
+# Load packages, read in data
+
+library(janitor)
+library(plotrix)
+library(FSA)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(knitr)
+library(sjPlot)
+library(glmmTMB)
+library(car)
+library(MASS)
+library(vegan)
+library(labdsv)
+library(pairwiseAdonis)
+library(tidyverse)
+
+percent_cover_19_23_master <- read_csv("Del_Sol_and_Camino_Corto_Permanent_Quadrats_2019_2023.csv", col_types = cols("Pool ID" = col_character(), "Thatch Depth (cm)" = col_double()))
+metadata <- read_csv("metadata.csv") %>% select("Quadrat ID", "Treatment", "Seeded")
+thatch_biomass <- read_csv("Del Sol_Camino Corto Thatch Biomass.csv") %>%
+  clean_names() %>% 
+  select(-treatment) %>% 
+  rename(replicate = "quadrat_id")
+edna <- read_csv("edna_angiosperms_by_quadrat.csv")
+
+
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# Precipitation data from summer-summer https://www.cnrfc.noaa.gov/rainfall_data.php
+precip <- data.frame(year = c("2019", "2020", "2021", "2022", "2023"),
+                     annual_precip_cm = c("55.6768", "29.3878", "18.5674", "27.0256", "73.533")) %>% 
+  mutate(year = as.numeric(year)) %>% 
+  mutate(annual_precip_cm = as.numeric(annual_precip_cm))
+
+```
+
+# Thatch decomposition rates
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# Thatch decomposition rates
+
+annual_thatch_biomass <- metadata %>% 
+  clean_names() %>% 
+  mutate(pool = substr(quadrat_id, 1, 1)) %>% 
+  select(-quadrat_id) %>% 
+  select(-seeded) %>% 
+  distinct() %>% 
+  full_join(thatch_biomass) %>% 
+  group_by(treatment, pool, year, month, replicate) %>% 
+  summarize(biomass = sum(biomass_g)) %>% 
+  filter(month == 9 | month == 8) %>% 
+  ungroup() %>% 
+  select(-month) %>% 
+  mutate(biomass = case_when(treatment == "1" ~ biomass/10, treatment == "2" ~ biomass, treatment == "3" ~ biomass)) %>% 
+  mutate(treatment = case_when(treatment == "1" ~ "removal", treatment == "2" ~ "disturbance", treatment == "3" ~ "control")) %>% 
+  drop_na()
+
+## Exploratory graphs
+thatch_biomass_hist <- annual_thatch_biomass %>% 
+  ggplot() +
+  geom_histogram(aes(x = biomass))
+#skewed right
+thatch_biomass_qq <- annual_thatch_biomass %>% 
+  ggplot() +
+  geom_qq(aes(sample = biomass))
+#skewed right
+
+## GLMER of annual thatch biomass
+thatch_biomass_glmer <- annual_thatch_biomass %>% 
+  glmer(biomass ~ as.factor(year)*(treatment) + (1|replicate), family = Gamma(link = "log"), data = .)
+#### Check diagnostic graphs
+#E1 <- resid(thatch_biomass_glmer)
+#F1 <- fitted(thatch_biomass_glmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#ranef <- as.data.frame(ranef((thatch_biomass_glmer)))
+#ranef_intercept <- ranef$condval
+#qqnorm(ranef_intercept, main = "Quadrat ID Residuals")
+#qqline(ranef_intercept) #run 2 lines together -- assess if random effects residuals are normal
+thatch_glmer_tukey <- emmeans(thatch_biomass_glmer, pairwise ~ treatment | as.factor(year), adjust = "tukey")
+#disturbance not sig diff from control
+#2019: control > removal p = 0.0951
+#2020: control > removal p = 0.0506
+#2021: control > removal p < 0.0001, disturbance > removal p < 0.0001
+#2022: control > removal p < 0.0001, disturbance > removal p < 0.0001
+
+
+
+thatch_decomposition_rates <- metadata %>% 
+  clean_names() %>% 
+  mutate(pool = substr(quadrat_id, 1, 1)) %>% 
+  select(-quadrat_id) %>% 
+  select(-seeded) %>% 
+  distinct() %>% 
+  full_join(thatch_biomass) %>% 
+  mutate(year_month = paste("y", year, month, sep = ".")) %>% 
+  group_by(treatment, pool, year_month, replicate) %>% 
+  summarize(biomass = sum(biomass_g)) %>% 
+  mutate(treatment = case_when(treatment == "1" ~ "removal", treatment == "2" ~ "disturbance", treatment == "3" ~ "control")) %>% 
+  filter(treatment != "removal") %>% 
+  group_by(treatment, year_month) %>% 
+  summarize(mean_biomass_g = mean(biomass)) %>% 
+  pivot_wider(names_from = year_month, values_from = mean_biomass_g) %>% 
+  mutate(a_2019 = y.2019.9 - y.2019.10) %>% #from treatment to first rains, disturbance rate < control rate
+  mutate(b_2019 = (y.2019.10 - y.2020.8)/2) %>% 
+  mutate(c_2019 = y.2019.9 - y.2020.8) %>% 
+  mutate(a_2020 = (y.2020.8 - y.2020.10)/2) %>% 
+  mutate(b_2020 = (y.2020.10 - y.2020.12)/2) %> %#from treatment to first rains, disturbance rate < control rate
+  mutate(c_2020 = (y.2020.8 - y.2020.12)/4) %>% 
+  mutate(d_2020 = (y.2020.12 - y.2021.9)/9) %>% 
+  mutate(e_2020 = (y.2020.8 - y.2021.9)/1) %>% 
+  mutate(a_2021 = (y.2021.9 - y.2021.10)/1) %>% #from treatment to first rains, disturbance rate < control rate
+  mutate(b_2021 = (y.2021.10 - y.2022.9)/2) %>% 
+  mutate(c_2021 = (y.2021.9 - y.2022.9)/11) %>% 
+  mutate(a_2022 = (y.2022.9 - y.2022.10)/2) #from treatment to first rains, disturbance rate < control rate
+
+
+```
+
+# Boxplots of thatch cover, bare ground, total native and nonnative percent cover, native richness
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Boxplots of thatch cover, bare ground, total native and nonnative percent cover, native richness
+
+## Clean up data
+pc_19_23 <- percent_cover_19_23_master %>% 
+  select(-"Treatment") %>% 
+  select(-"Seeded") %>%
+  full_join(metadata, by = "Quadrat ID") %>% 
+  clean_names() %>% 
+  select(pool_id, zone, quadrat_id, quadrat_notes, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, sum_of_native_cover, nonnative_species_richness, sum_of_nonnative_cover, sum_of_all_cover, year, treatment, seeded, native_status, species, percent_cover) %>% 
+  mutate(treatment = replace(treatment, treatment == 1, "Thatch Removal")) %>% 
+  mutate(treatment = replace(treatment, treatment == 2, "Thatch Disturbance")) %>% 
+  mutate(treatment = replace(treatment, treatment == 3, "Control")) %>% 
+  mutate(seeded = replace(seeded, seeded == 1, "x Native Seed Addition")) %>% 
+  mutate(seeded = replace(seeded, seeded == 0, "   No Seed Addition"))
+
+
+## Species rankings by year
+year_average_species_pc <- pc_19_23 %>% 
+  select(pool_id, quadrat_id, year, treatment, seeded, native_status, species, percent_cover) %>% 
+  group_by(quadrat_id, year, treatment, seeded, species, percent_cover) %>% 
+  summarize(pc = mean(percent_cover)) %>% 
+  pivot_wider(names_from = species, values_from = pc) %>% 
+  mutate_all(funs(replace_na(.,0))) %>% 
+  pivot_longer(6:72, names_to = "species", values_to = "pc") %>% 
+  group_by(year, species) %>% 
+  summarize(mean_pc = mean(pc))
+
+
+## Calculate richness, sums of cover
+pc_19_23_totals <- pc_19_23 %>% 
+  group_by(pool_id, zone, quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, year, treatment, seeded, native_status) %>% 
+  summarize(species_richness = length(species),
+            sum_of_cover = sum(percent_cover)) %>% 
+  mutate(quadrat_id_year = paste(quadrat_id, year, sep = "_"))
+
+## Exploratory graphs
+native_richness_hist <- pc_19_23 %>% 
+  ggplot() +
+  geom_histogram(aes(x = native_species_richness))
+#slightly skewed right
+native_richness_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = native_species_richness))
+#slightly skewed right
+nonnative_richness_hist <- pc_19_23 %>% 
+  ggplot() +
+  geom_histogram(aes(x = nonnative_species_richness))
+#normal!
+nonnative_richness_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = nonnative_species_richness))
+#normal!
+native_cover_hist <- pc_19_23 %>% 
+  ggplot() +
+  geom_histogram(aes(x = sum_of_native_cover))
+#skewed right
+native_cover_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = sum_of_native_cover))
+#skewed right
+nonnative_cover_hist <- pc_19_23 %>% 
+  ggplot() +
+  geom_histogram(aes(x = sum_of_nonnative_cover))
+#bimodal
+nonnative_cover_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = sum_of_nonnative_cover))
+#bimodal
+thatch_pc_hist <- pc_19_23 %>% 
+  ggplot() +
+  geom_histogram(aes(x = percent_thatch))
+#bimodal
+thatch_pc_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = percent_thatch))
+#bimodal
+thatch_depth_hist <- pc_19_23 %>% 
+  ggplot() +
+  geom_histogram(aes(x = (thatch_depth_cm)))
+#skewed right
+thatch_depth_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = (thatch_depth_cm)))
+#skewed right
+bg_hist <- pc_19_23 %>% 
+  filter(percent_bare_ground>0) %>% 
+  ggplot() +
+  geom_histogram(aes(x = percent_bare_ground))
+#skewed right
+bg_qq <- pc_19_23 %>% 
+  ggplot() +
+  geom_qq(aes(sample = percent_bare_ground))
+#skewed right
+
+
+
+## Summarize richness, thatch percent cover, thatch depth, bare ground per year & treatment
+richness_thatch_bg_19_23 <- pc_19_23 %>% 
+  group_by(year, treatment) %>% 
+  summarize(mean_native_richness = mean(native_species_richness),
+            se_native_richness = std.error(native_species_richness),
+            median_native_richness = median(native_species_richness),
+            mean_nonnative_richness = mean(nonnative_species_richness),
+            se_nonnative_richness = std.error(nonnative_species_richness),
+            median_nonnative_richness = median(nonnative_species_richness),
+            mean_thatch_pc = mean(percent_thatch),
+            se_thatch_pc = std.error(percent_thatch),
+            median_thatch_pc = median(percent_thatch),
+            mean_thatch_depth = mean(as.numeric(thatch_depth_cm)),
+            se_thatch_depth = std.error(as.numeric(thatch_depth_cm)),
+            median_thatch_depth = median(thatch_depth_cm),
+            mean_bare_ground = mean(percent_bare_ground),
+            se_bare_ground = std.error(percent_bare_ground),
+            median_bare_ground = median(percent_bare_ground))
+
+
+## Exploratory graphs
+native_richness_hist <- pc_19_23_totals %>% 
+  filter(native_status == "native") %>% 
+  ggplot() +
+  geom_histogram(aes(x = species_richness))
+#skewed right
+native_richness_qq <- pc_19_23_totals %>% 
+  filter(native_status == "native") %>% 
+  ggplot() +
+  geom_qq(aes(sample = species_richness))
+#slightly skewed right
+nonnative_richness_hist <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_histogram(aes(x = species_richness))
+#normal!
+nonnative_richness_qq <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_qq(aes(sample = species_richness))
+#normal!
+native_cover_hist <- pc_19_23_totals %>% 
+  filter(native_status == "native") %>% 
+  ggplot() +
+  geom_histogram(aes(x = sum_of_cover))
+#skewed right
+native_cover_qq <- pc_19_23_totals %>% 
+  filter(native_status == "native") %>% 
+  ggplot() +
+  geom_qq(aes(sample = sum_of_cover))
+#skewed right
+nonnative_cover_hist <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_histogram(aes(x = sum_of_cover, fill = as.factor(year)))
+#bimodal
+nonnative_cover_qq <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_qq(aes(sample = sum_of_cover))
+#bimodal
+thatch_pc_hist <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_histogram(aes(x = percent_thatch))
+#bimodal
+thatch_pc_qq <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_qq(aes(sample = percent_thatch))
+#bimodal
+thatch_depth_hist <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_histogram(aes(x = (thatch_depth_cm)))
+#skewed right
+thatch_depth_qq <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_qq(aes(sample = (thatch_depth_cm)))
+#skewed right
+bg_hist <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_histogram(aes(x = percent_bare_ground, color = as.factor(year)))
+#skewed right
+bg_qq <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot() +
+  geom_qq(aes(sample = percent_bare_ground))
+#skewed right
+
+
+
+
+## Boxplot of percent thatch
+thatch_pc_19_23_box <- pc_19_23_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = as.factor(year), y = percent_thatch), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(x = as.factor(year), y = percent_thatch, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Thatch cover after fourth year of treatments", x = "Year", y = "Thatch Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100), sec.axis = sec_axis(~., name = "Precipitation (cm)")) +
+  theme_classic(base_size = 25) +
+  scale_fill_manual(values = c("grey", "orange", "mediumorchid2"), name = "Treatment")
+thatch_pc_19_23_box
+
+### GLMER
+thatch_pc_glmer_beta <- pc_19_23_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "nonnative") %>% 
+  mutate(prop_thatch = percent_thatch/100) %>% 
+  mutate(prop_thatch = replace(prop_thatch, prop_thatch == 0, 0.1)) %>% 
+  glmmTMB(prop_thatch ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment + as.factor(year):seeded:treatment + (1|quadrat_id), family = beta_family(), data = .)
+#summary(thatch_pc_glmer_beta)
+#tab_model(thatch_pc_glmer_beta, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(thatch_pc_glmer_beta)
+#F1 <- fitted(thatch_pc_glmer_beta)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#ranef <- as.data.frame(ranef((thatch_pc_glmer_beta)))
+#ranef_intercept <- ranef$condval
+#qqnorm(ranef_intercept, main = "Quadrat ID Residuals")
+#qqline(ranef_intercept) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+thatch_pc_glmer_beta_anova <- aov(thatch_pc_glmer_beta)
+#summary(thatch_pc_glmer_beta_anova)
+#year, treatment, year*treatment (df = 8, F = 69.352) sig
+thatch_pc_glmer_beta_tukey <- emmeans(thatch_pc_glmer_beta, pairwise ~ treatment | as.factor(year), adjust = "tukey", type = "response")
+#plot(thatch_pc_glmer_beta_tukey)
+#2019: Control < Removal, p = 0.0073 (EXCEPT control/yes vs. removal/no and removal/yes vs. control/no control/no vs. removal/no -- removal still slightly higher but not sig, only sig for control/yes < removal yes p = 0.0143)
+#2020: Control > Removal p < 0.0001; Disturbance > Removal p < 0.0001
+#2021: Control > Removal p < 0.0001; Disturbance > Removal p < 0.0001
+#2022: Control > Removal p < 0.0001; Disturbance > Removal p < 0.0001
+#2023: Control > Removal p < 0.0001; Disturbance > Removal p < 0.0001
+
+
+
+
+## Boxplot of thatch depth
+thatch_depth_19_23_box <- pc_19_23 %>% 
+  full_join(precip) %>% 
+  ggplot(aes(x = as.factor(year), y = thatch_depth_cm), stat = "identity", group = treatment) +
+  geom_boxplot(aes(y = thatch_depth_cm, fill = treatment), position = "dodge", width = .4) +
+  geom_point(aes(x = as.factor(year), y = annual_precip_cm), color = "blue", linetype = "dashed") +
+  geom_segment(aes(y = 55.6768, x = as.character(2019), yend = 29.3878, xend = as.character(2020)), color = "blue", linetype = "dashed") +
+  geom_segment(aes(yend = 18.5674, x = as.character(2020), y = 29.3878, xend = as.character(2021)), color = "blue", linetype = "dashed") +
+    geom_segment(aes(y = 18.5674, x = as.character(2021), yend = 27.0256, xend = as.character(2022)), color = "blue", linetype = "dashed") +
+      geom_segment(aes(yend = 73.5330, x = as.character(2022), y = 27.0256, xend = as.character(2023)), color = "blue", linetype = "dashed") +
+  labs(title = "Thatch depth after fourth year of treatments", x = "Year", y = "Thatch Depth (cm)", caption = "") +
+  scale_y_continuous(expand = c(0,0), sec.axis = sec_axis(~., name = "Precipitation (cm)")) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "tan", "orange"), name = "Treatment")
+thatch_depth_19_23_box
+
+### GLMER
+thatch_depth_glmer <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  mutate(thatch_depth_cm = replace(thatch_depth_cm, thatch_depth_cm == 0, 0.1)) %>% 
+  glmer((thatch_depth_cm) ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment +  (1|quadrat_id), family = Gamma(link = "log"), data = .)
+#summary(thatch_depth_glmer)
+
+
+#### Check diagnostic graphs
+#E1 <- resid(thatch_depth_glmer)
+#F1 <- fitted(thatch_depth_glmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(thatch_depth_glmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(thatch_depth_glmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+thatch_depth_glmer_tukey <- emmeans(thatch_depth_glmer, pairwise ~ treatment*seeded | as.factor(year), adjust = "tukey")
+#plot(thatch_depth_glmer_tukey)
+#2019: Control > Disturbance p = 0.0079 (control/yes > disturbance/no p = 0.0835, BUT NOT control/yes < disturbance/yes, disturbance/yes > control/no, control/no < disturbance/no); Control > Removal p = 0.0005 (control/yes < removal/yes p = 0.0276, control/no < removal/no p = 0.0417, BUT NOT control/yes < removal/no, removal/yes > control/no)
+#2020: Control < Disturbance p = 0.0134 (BUT NOT w/ interaction); Control > Removal p < 0.0001; Disturbance > Removal p < 0.001
+#2021: Control > Removal p < 0.0001; Disturbance > Removal p < 0.001
+#2022: Control > Removal p < 0.0001; Disturbance > Removal p < 0.001
+#2023: Control > Removal p < 0.0001; Disturbance > Removal p < 0.001
+
+
+# Boxplot of bare ground
+bg_19_23_box <- pc_19_23_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = as.factor(year), y = percent_bare_ground), stat = "identity", group = treatment) +
+    geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = percent_bare_ground, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Bare ground after fourth year of treatments", x = "Year", y = "Bare Ground Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100), sec.axis = sec_axis(~., name = "Precipitation (cm)")) +
+  theme_classic(base_size = 22) +
+  scale_fill_manual(values = c("grey", "orange", "mediumorchid2"), name = "Treatment")
+bg_19_23_box
+
+### GLMER
+#### Hurdle 1
+bg_glmer_hurdle1 <- pc_19_23_totals %>% 
+    filter(native_status == "nonnative") %>% 
+    mutate(non_zero = ifelse(percent_bare_ground >0, 1, 0)) %>%
+  glmmTMB(non_zero ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment + (1|quadrat_id), zi = ~1, family = binomial(link = logit), data = .)
+#summary(bg_glmer_hurdle1)
+#tab_model(bg_glmer_hurdle1, transform = NULL)
+
+### Hurdle 2 -- variance is not symmetrical and random residuals are not normal...log-transform (according to Box-Cox)
+bg_glmer_hurdle2 <- pc_19_23_totals %>% 
+    filter(native_status == "nonnative") %>% 
+    mutate(non_zero = ifelse(percent_bare_ground >0, 1, 0)) %>%
+  filter(non_zero == 1) %>% 
+  glmmTMB(log(percent_bare_ground+.1) ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment +  (1|quadrat_id), zi = ~1, family = Gamma(link = log), data = .)
+#summary(bg_glmer_hurdle2)
+#tab_model(bg_glmer_hurdle2, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(bg_glmer_hurdle2)
+#F1 <- fitted(bg_glmer_hurdle2)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#ranef <- as.data.frame(ranef((bg_glmer_hurdle2)))
+#ranef_intercept <- ranef$condval
+#qqnorm(ranef_intercept, main = "Quadrat ID Residuals")
+#qqline(ranef_intercept) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+bg_glmer_hurdle2_anova <- aov(bg_glmer_hurdle2)
+#summary(bg_glmer_hurdle2_anova)
+#year, treatment, year*treatment (df = 8, F = 36.011) sig
+bg_glmer_hurdle2_tukey <- emmeans(bg_glmer_hurdle2, pairwise ~ treatment | as.factor(year), adjust = "tukey", type = "response")
+#plot(bg_glmer_hurdle2_tukey)
+#2019: no sig diff
+#2020: Control < Removal p = 0.0126 (EXCEPT control/no vs. removal/yes; and control/no vs. removal/no – control/no had slightly higher bare ground but not as high as removal); Disturbance < Removal p = 0.0019
+#2021: Control < Removal p < 0.0001; Disturbance < Removal p < 0.0001
+#2022: Control < Removal p < 0.0001; Disturbance < Removal p < 0.0001 (control/yes < control/no p = 0.07)
+#2023: Control < Removal p = 0.0019 (EXCEPT removal/yes vs. control/no – control/no higher but not as high as removal/yes, but no sig diff; control/no vs. removal/no – removal/no higher but not sig); Disturbance < Removal p < 0.0001 (control/no > control/yes p = 0.00247)
+
+
+# Boxplot of bare ground, separated by seeding treatment
+seeded_bg_19_23_box <- pc_19_23 %>% 
+  ggplot(aes(x = treatment, y = percent_bare_ground), stat = "identity", group = as.factor(year)) +
+  geom_boxplot(aes(y = percent_bare_ground, fill = as.factor(year)), position = "dodge", width = .4) +
+  facet_wrap(~seeded) +
+  labs(title = "Bare ground after fourth year of treatments", x = "Treatment", y = "Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue1", "lightblue2", "lightblue3", "lightblue4"), name = "Year")
+seeded_bg_19_23_box
+
+
+
+
+
+
+# Boxplot of total native and nonnative percent cover
+cover_19_23_box <- pc_19_23_totals %>% 
+  ggplot(aes(x = as.factor(year), y = sum_of_cover), stat = "identity", group = treatment) +
+  geom_boxplot(aes(y = sum_of_cover, fill = treatment), position = "dodge", width = .4) +
+  facet_wrap(~native_status) +
+  labs(title = "Species cover after fourth year of treatments", x = "Year", y = "Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue1", "lightblue2", "lightblue3", "lightblue4"), name = "Year")
+cover_19_23_box
+
+
+### GLMER, for native pc
+#### Hurdle 1
+native_pc_glmer_hurdle1 <- pc_19_23_totals %>% 
+    filter(native_status == "native") %>% 
+    mutate(non_zero = ifelse(sum_of_cover >0, 1, 0)) %>%
+  glmmTMB(non_zero ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment + (1|quadrat_id), zi = ~1, family = binomial(link = logit), data = .)
+#summary(native_pc_glmer_hurdle1)
+#tab_model(native_pc_glmer_hurdle1, transform = NULL)
+
+### Hurdle 2
+native_pc_glmer_hurdle2 <- pc_19_23_totals %>% 
+    filter(native_status == "native") %>% 
+    mutate(non_zero = ifelse(sum_of_cover >0, 1, 0)) %>%
+  filter(non_zero == 1) %>% 
+  glmmTMB(sum_of_cover ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment + (1|quadrat_id), zi = ~1, family = Gamma(link = log), data = .)
+#summary(native_pc_glmer_hurdle2)
+#tab_model(native_pc_glmer_hurdle2, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(native_pc_glmer_hurdle2)
+#F1 <- fitted(native_pc_glmer_hurdle2)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#ranef <- as.data.frame(ranef((native_pc_glmer_hurdle2)))
+#ranef_intercept <- ranef$condval
+#qqnorm(ranef_intercept, main = "Quadrat ID Residuals")
+#qqline(ranef_intercept) #run 2 lines together -- assess if random effects residuals are normal
+
+##Tukey's
+native_pc_anova <- aov(native_pc_glmer_hurdle2)
+#summary(native_pc_anova)
+#year, treatment, year*treatment (df = 8, F = 3.681) sig
+native_pc_tukey <- emmeans(native_pc_glmer_hurdle2, list(pairwise ~ treatment | as.factor(year)), adjust = "tukey")
+#plot(native_pc_tukey, comparisons = TRUE, xlab = "")
+#2019: no sig diff
+#2020: no sig diff
+#2021: ONLY control/yes < disturbance/yes p = 0.0179
+#2022: no sig diff
+#2023: Control < Removal p = 0.0260 (ONLY control/yes < removal/yes p = 0.0076 -- for others, removal still slightly higher but not sig), Disturbance < Removal p = 0.0003 (EXCEPT disturbance/yes vs. removal/no -- removal still slightly higher but not sig)
+
+
+
+### GLMER, for nonnative pc -- not good, unequal variances -- sqrt transformation (according to Box-Cox transformation)
+nonnative_pc_glmer <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  glmer((sqrt(sum_of_cover)) ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment +  (1|quadrat_id), family = Gamma(link = "log"), data = .)
+#summary(nonnative_pc_glmer)
+#tab_model(nonnative_pc_glmer, transform = NULL)
+
+
+#### Check diagnostic graphs
+#E1 <- resid(nonnative_pc_glmer)
+#F1 <- fitted(nonnative_pc_glmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(nonnative_pc_glmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(nonnative_pc_glmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+nonnative_pc_tukey <- emmeans(nonnative_pc_glmer, list(pairwise ~ treatment|as.factor(year)), adjust = "tukey")
+#plot(nonnative_pc_tukey, comparisons = TRUE, xlab = "")
+#2019: no sig diff
+#2020: no sig diff
+#2021: Control < Removal p = 0.0048 (ONLY control/no < removal/no p = 0.0435); Disturbance < Removal p = 0.0008 (EXCEPT disturbance/yes vs. removal/no, disturbances/yes vs. removal/yes -- removal still slightly higer but not sig)
+#2022: no sig diff
+#2023: Control < Disturbance p = 0.0189 (BUT not when interacted w/ seeded -- disturbance still higher but not sig); Disturbance > Removal p < 0.001 (EXCEPT disturbance/yes > removal/no (not sig))
+
+
+
+
+
+
+# Boxplot of total native and nonnative percent cover per year & treatment & seeding
+seeded_pc_totals_19_23_box <- pc_19_23_totals %>% 
+  ggplot(aes(x = as.factor(year), y = sum_of_cover), stat = "identity", group = treatment) +
+  geom_boxplot(aes(y = sum_of_cover, fill = treatment), position = "dodge", width = .4) +
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Total native and nonnative cover after fourth year of treatments", x = "Year", y = "Percent Cover (%)") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(values = c("grey", "tan", "orange"), name = "Treatment") +
+  theme(axis.text.x = element_text(angle = 90))
+seeded_pc_totals_19_23_box
+
+
+# Boxplot of total native percent cover per year & treatment
+native_pc_totals_19_23_box <- pc_19_23_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "native") %>% 
+  ggplot(aes(x = as.factor(year), y = sum_of_cover), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = sum_of_cover, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Total native cover after fourth year of treatments", x = "Year", y = "Native Species Percent Cover (%)") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 180), breaks = c(25, 50, 75, 100, 125, 150, 175), sec.axis = sec_axis(~., name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("grey", "orange", "mediumorchid2"), name = "Treatment") +
+  theme_classic(base_size = 22)
+native_pc_totals_19_23_box
+
+# Boxplot of total nonnative percent cover per year & treatment
+nonnative_pc_totals_19_23_box <- pc_19_23_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = as.factor(year), y = sum_of_cover), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = sum_of_cover, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Total nonnative cover after fourth year of treatments", x = "Year", y = "Exotic Species Percent Cover (%)") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 180), breaks = c(25, 50, 75, 100, 125, 150, 175), sec.axis = sec_axis(~., name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("grey", "orange", "mediumorchid2"), name = "Treatment") +
+  theme_classic(base_size = 22)
+nonnative_pc_totals_19_23_box
+
+
+
+
+# Boxplot of richness
+richness_19_23_box <- pc_19_23_totals %>% 
+  ggplot(aes(x = treatment, y = species_richness), stat = "identity", group = as.factor(year)) +
+  geom_boxplot(aes(y = species_richness, fill = as.factor(year)), position = "dodge", width = .4) +
+  facet_wrap(~native_status) +
+  labs(title = "Species richness after fourth year of treatments", x = "Treatment", y = "Richness", caption = "Sig differences b/t years \n Only sig difference b/t nonnatives 19removal-20removal p = 0.047") +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  scale_fill_manual(values = c("grey", "lightblue1", "lightblue2", "lightblue3", "lightblue4"), name = "Year")
+richness_19_23_box
+
+
+### GLMER of native richness
+native_richness_glmer <- pc_19_23_totals %>% 
+  filter(native_status == "native") %>% 
+  glmer(species_richness ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment +  (1|quadrat_id), family = "poisson", data = .)
+#summary(native_richness_glmer)
+#tab_model(native_richness_glmer, transform = NULL)
+
+#### Checking for overdispersion -- how well your chosen link distribution matches your data
+#E1<-resid(native_richness_glmer, type = "pearson")
+#N <- length(E1)
+#p <- length(coef(native_richness_glmer))
+#D <- sum(E1^2) / (N - p)
+#D = 0.2950326 -- want this to be 1.0-1.1; above 1.2 is not great; above 1.3 is really not good (overdispersed = easier to accept false sig differences); if underdispersed (<1) then there's less error than the distribution can handle (harder to detect sig diff)
+
+#### Check diagnostic graphs
+#E1 <- resid(native_richness_glmer)
+#F1 <- fitted(native_richness_glmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(native_richness_glmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(native_richness_glmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+
+#### Tukey's post-hoc of least-squares means
+native_richness_anova <- anova(native_richness_glmer)
+#summary(native_richness_anova)
+#year, seeded (df = 4, F = 3.5332) sig
+native_richness_tukey <- emmeans(native_richness_glmer, list(pairwise ~ seeded|as.factor(year)), adjust = "tukey")
+#plot(native_richness_tukey, comparisons = TRUE, xlab = "")
+#2019: no sig diff
+#2020: no sig diff
+#2021: Control < Removal p = 0.0235 (but not when interacted w/ seeded)
+#2022: removal/yes > disturbance/no p = 0.0336, removal/yes > removal/no p = 0.0182; Seeded > Unseeded p = 0.0003
+#2023: removal/yes > removal/no p = 0.0132; Seeded > Unseeded p = 0.001
+
+
+
+
+#### LMER of nonnative richness
+nonnative_richness_lmer <- pc_19_23_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  lmer(species_richness ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment +  (1|quadrat_id), data = .)
+#summary(nonnative_richness_lmer)
+#tab_model(nonnative_richness_lmer, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(nonnative_richness_lmer)
+#F1 <- fitted(nonnative_richness_lmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(nonnative_richness_lmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(nonnative_richness_lmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+nonnative_richness_anova <- anova(nonnative_richness_lmer)
+#year, treatment, year*treatment (df = 8/703.71, F = 3.5386, p = 0.0004992) sig
+nonnative_richness_tukey <- emmeans(nonnative_richness_lmer, list(pairwise ~ treatment|as.factor(year)), adjust = "tukey")
+#2019: no sig diff
+#2020: Control > Removal (but not when interacted w/ seeded), Disturbance > Removal (but not when interacted w/ seeded, instead removal/yes > disturbance/no p = .0330)
+#2021: Disturbance < Removal (but not when interacted w/ seeded)
+#2022: Disturbance < Removal (but not when interacted w/ seeded)
+#2023: no sig diff
+
+
+
+
+# Boxplot of richness, seeded vs. unseeded
+seeded_richness_19_23_box <- pc_19_23_totals %>% 
+  ggplot(aes(x = as.factor(year), y = species_richness), stat = "identity", group = treatment) +
+  geom_boxplot(aes(y = species_richness, fill = treatment), position = "dodge", width = .4) +
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Species richness after fourth year of treatments", x = "Year", y = "Richness", caption = ")") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(values = c("grey", "tan", "orange"), name = "Treatment")
+seeded_richness_19_23_box
+
+# Boxplot of native richness, seeded vs. unseeded
+seeded_native_richness_19_23_box <- pc_19_23_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "native") %>% 
+  ggplot(aes(x = as.factor(year), y = species_richness), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm/10), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = species_richness, fill = seeded), position = "dodge", width = .4) +
+  labs(title = "Native richness after fourth year of treatments", x = "Year", y = "Native Species Richness", caption = ")") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 13), breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), sec.axis = sec_axis(~.*10, name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("grey", "chartreuse3"), name = "Treatment") +
+  theme_classic(base_size = 25)
+seeded_native_richness_19_23_box
+
+
+
+```
+
+# Boxplots using change in percent cover/richness
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Boxplots using change in percent cover/richness
+
+## Summarize change in richness, thatch percent cover, thatch depth, bare ground per year & treatment
+
+### Dataframe of just 2019 richness, thatch, bg, pc
+richness_thatch_bg_pc_19 <- pc_19_23 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, nonnative_species_richness, sum_of_native_cover, sum_of_nonnative_cover, year, treatment, seeded) %>% 
+  filter(year == 2019) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_19 = "percent_bare_ground",
+         percent_thatch_19 = "percent_thatch",
+         thatch_depth_19 = "thatch_depth_cm",
+         native_species_richness_19 = "native_species_richness",
+         nonnative_species_richness_19 = "nonnative_species_richness",
+         native_pc_19 = "sum_of_native_cover",
+         nonnative_pc_19 = "sum_of_nonnative_cover") %>% 
+  select(-year)
+
+### Dataframe of just 2020 richness, thatch, bg
+richness_thatch_bg_pc_20 <- pc_19_23 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, nonnative_species_richness, sum_of_native_cover, sum_of_nonnative_cover, year, treatment, seeded) %>% 
+  filter(year == 2020) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_20 = "percent_bare_ground",
+         percent_thatch_20 = "percent_thatch",
+         thatch_depth_20 = "thatch_depth_cm",
+         native_species_richness_20 = "native_species_richness",
+         nonnative_species_richness_20 = "nonnative_species_richness",
+         native_pc_20 = "sum_of_native_cover",
+         nonnative_pc_20 = "sum_of_nonnative_cover") %>% 
+  select(-year)
+
+### Dataframe of just 2021 richness, thatch, bg
+richness_thatch_bg_pc_21 <- pc_19_23 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, nonnative_species_richness, sum_of_native_cover, sum_of_nonnative_cover, year, treatment, seeded) %>% 
+  filter(year == 2021) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_21 = "percent_bare_ground",
+         percent_thatch_21 = "percent_thatch",
+         thatch_depth_21 = "thatch_depth_cm",
+         native_species_richness_21 = "native_species_richness",
+         nonnative_species_richness_21 = "nonnative_species_richness",
+         native_pc_21 = "sum_of_native_cover",
+         nonnative_pc_21 = "sum_of_nonnative_cover") %>% 
+  select(-year)
+
+### Dataframe of just 2022 richness, thatch, bg
+richness_thatch_bg_pc_22 <- pc_19_23 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, nonnative_species_richness, sum_of_native_cover, sum_of_nonnative_cover, year, treatment, seeded) %>% 
+  filter(year == 2022) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_22 = "percent_bare_ground",
+         percent_thatch_22 = "percent_thatch",
+         thatch_depth_22 = "thatch_depth_cm",
+         native_species_richness_22 = "native_species_richness",
+         nonnative_species_richness_22 = "nonnative_species_richness",
+         native_pc_22 = "sum_of_native_cover",
+         nonnative_pc_22 = "sum_of_nonnative_cover") %>% 
+  select(-year)
+
+### Dataframe of just 2023 richness, thatch, bg
+richness_thatch_bg_pc_23 <- pc_19_23 %>% 
+  select(quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, nonnative_species_richness, sum_of_native_cover, sum_of_nonnative_cover, year, treatment, seeded) %>% 
+  filter(year == 2023) %>% 
+  distinct() %>% 
+  rename(percent_bare_ground_23 = "percent_bare_ground",
+         percent_thatch_23 = "percent_thatch",
+         thatch_depth_23 = "thatch_depth_cm",
+         native_species_richness_23 = "native_species_richness",
+         nonnative_species_richness_23 = "nonnative_species_richness",
+         native_pc_23 = "sum_of_native_cover",
+         nonnative_pc_23 = "sum_of_nonnative_cover") %>% 
+  select(-year)
+
+### Dataframe of change in richness, thatch percent cover, thatch depth, bare ground per year & treatment
+change_richness_thatch_bg_pc_19_23 <- richness_thatch_bg_pc_19 %>% 
+  full_join(richness_thatch_bg_pc_20) %>%
+  full_join(richness_thatch_bg_pc_21) %>%
+  full_join(richness_thatch_bg_pc_22) %>% 
+  full_join(richness_thatch_bg_pc_23) %>% 
+  mutate(change_bg_1 = percent_bare_ground_20-percent_bare_ground_19,
+         change_thatch_pc_1 = percent_thatch_20-percent_thatch_19,
+         change_thatch_depth_1 = thatch_depth_20-thatch_depth_19,
+         change_native_richness_1 = native_species_richness_20-native_species_richness_19,
+         change_nonnative_richness_1 = nonnative_species_richness_20-nonnative_species_richness_19,
+         change_native_pc_1 = native_pc_20-native_pc_19,
+         change_nonnative_pc_1 = nonnative_pc_20-nonnative_pc_19,
+         change_bg_2 = percent_bare_ground_21-percent_bare_ground_20,
+         change_thatch_pc_2 = percent_thatch_21-percent_thatch_20,
+         change_thatch_depth_2 = thatch_depth_21-thatch_depth_20,
+         change_native_richness_2 = native_species_richness_21-native_species_richness_20,
+         change_nonnative_richness_2 = nonnative_species_richness_21-nonnative_species_richness_20,
+         change_native_pc_2 = native_pc_21-native_pc_20,
+         change_nonnative_pc_2 = nonnative_pc_21-nonnative_pc_20,
+         change_bg_3 = percent_bare_ground_22-percent_bare_ground_21,
+         change_thatch_pc_3 = percent_thatch_22-percent_thatch_21,
+         change_thatch_depth_3 = thatch_depth_22-thatch_depth_21,
+         change_native_richness_3 = native_species_richness_22-native_species_richness_21,
+         change_nonnative_richness_3 = nonnative_species_richness_22-nonnative_species_richness_21,
+         change_native_pc_3 = native_pc_22-native_pc_21,
+         change_nonnative_pc_3 = nonnative_pc_22-nonnative_pc_21,
+         change_bg_4 = percent_bare_ground_23-percent_bare_ground_22,
+         change_thatch_pc_4 = percent_thatch_23-percent_thatch_22,
+         change_thatch_depth_4 = thatch_depth_23-thatch_depth_22,
+         change_native_richness_4 = native_species_richness_23-native_species_richness_22,
+         change_nonnative_richness_4 = nonnative_species_richness_23-nonnative_species_richness_22,
+         change_native_pc_4 = native_pc_23-native_pc_22,
+         change_nonnative_pc_4 = nonnative_pc_23-nonnative_pc_22)
+
+### Exploratory graphs
+change_bg_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_bg_1, change_bg_2, change_bg_3, change_bg_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_bg") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_bg))
+#normal!
+change_bg_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_bg_1, change_bg_2, change_bg_3, change_bg_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_bg") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_bg))
+#pretty normal!
+change_thatch_pc_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_thatch_pc_1, change_thatch_pc_2, change_thatch_pc_3, change_thatch_pc_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_thatch_pc") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_thatch_pc))
+#normal!
+change_thatch_pc_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_thatch_pc_1, change_thatch_pc_2, change_thatch_pc_3, change_thatch_pc_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_thatch_pc") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_thatch_pc))
+#pretty normal
+change_thatch_depth_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_thatch_depth_1, change_thatch_depth_2, change_thatch_depth_3, change_thatch_depth_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_thatch_depth") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_thatch_depth))
+#normal!
+change_thatch_depth_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_thatch_depth_1, change_thatch_depth_2, change_thatch_depth_3, change_thatch_depth_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_thatch_depth") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_thatch_depth))
+#normal!
+change_native_richness_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_native_richness_1, change_native_richness_2, change_native_richness_3, change_native_richness_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_native_richness") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_native_richness))
+#normal!
+change_native_richness_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_native_richness_1, change_native_richness_2, change_native_richness_3, change_native_richness_4) %>% 
+  pivot_longer(2:4, names_to = "treatment_year", values_to = "change_native_richness") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_native_richness))
+#normal!
+change_nonnative_richness_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_nonnative_richness_1, change_nonnative_richness_2, change_nonnative_richness_3, change_nonnative_richness_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_nonnative_richness") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_nonnative_richness))
+#normal!
+change_nonnative_richness_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_native_richness_1, change_native_richness_2, change_nonnative_richness_3, change_nonnative_richness_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_nonnative_richness") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_nonnative_richness))
+#normal!
+change_nonnative_pc_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_nonnative_pc_1, change_nonnative_pc_2, change_nonnative_pc_3, change_nonnative_pc_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_nonnative_pc") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_nonnative_pc))
+#bimodal
+change_nonnative_pc_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_nonnative_pc_1, change_nonnative_pc_2, change_nonnative_pc_3, change_nonnative_pc_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_nonnative_pc") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_nonnative_pc))
+#bimodal
+change_native_pc_hist <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_native_pc_1, change_native_pc_2, change_native_pc_3, change_native_pc_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_native_pc") %>% 
+  ggplot() +
+  geom_histogram(aes(x = change_native_pc))
+#normal!
+change_native_pc_qq <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, change_native_pc_1, change_native_pc_2, change_native_pc_3, change_native_pc_4) %>% 
+  pivot_longer(2:5, names_to = "treatment_year", values_to = "change_native_pc") %>% 
+  ggplot() +
+  geom_qq(aes(sample = change_native_pc))
+#pretty normal!
+
+
+
+
+### Summary of change stats, by year & treatment
+change_summary_19_23 <- change_richness_thatch_bg_pc_19_23 %>% 
+  group_by(treatment) %>% 
+  summarize(mean_change_native_pc_1 = mean(change_native_pc_1),
+            se_native_pc_1 = std.error(change_native_pc_1),
+            median_change_native_pc_1 = median(change_native_pc_1),
+            mean_change_native_pc_2 = mean(change_native_pc_2),
+            se_native_pc_2 = std.error(change_native_pc_2),
+            median_change_native_pc_2 = median(change_native_pc_2),
+            mean_change_native_pc_3 = mean(change_native_pc_3),
+            se_native_pc_3 = std.error(change_native_pc_3),
+            median_change_native_pc_3 = median(change_native_pc_3),
+            mean_change_native_pc_4 = mean(change_native_pc_4),
+            se_native_pc_4 = std.error(change_native_pc_4),
+            median_change_native_pc_4 = median(change_native_pc_4),
+            mean_change_nonnative_pc_1 = mean(change_nonnative_pc_1),
+            se_nonnative_pc_1 = std.error(change_nonnative_pc_1),
+            median_change_nonnative_pc_1 = median(change_nonnative_pc_1),
+            mean_change_nonnative_pc_2 = mean(change_nonnative_pc_2),
+            se_nonnative_pc_2 = std.error(change_nonnative_pc_2),
+            median_change_nonnative_richness_2 = median(change_nonnative_pc_2),
+            mean_change_nonnative_pc_3 = mean(change_nonnative_pc_3),
+            se_nonnative_pc_3 = std.error(change_nonnative_pc_3),
+            median_change_nonnative_richness_3 = median(change_nonnative_pc_3),
+            mean_change_nonnative_pc_4 = mean(change_nonnative_pc_4),
+            se_nonnative_pc_4 = std.error(change_nonnative_pc_4),
+            median_change_nonnative_pc_4 = median(change_nonnative_pc_4),
+            mean_change_native_richness_1 = mean(change_native_richness_1),
+            se_native_richness_1 = std.error(change_native_richness_1),
+            median_change_native_richness_1 = median(change_native_richness_1),
+            mean_change_native_richness_2 = mean(change_native_richness_2),
+            se_native_richness_2 = std.error(change_native_richness_2),
+            median_change_native_richness_2 = median(change_native_richness_2),
+            mean_change_native_richness_3 = mean(change_native_richness_3),
+            se_native_richness_3 = std.error(change_native_richness_3),
+            median_change_native_richness_3 = median(change_native_richness_3),
+            mean_change_native_richness_4 = mean(change_native_richness_4),
+            se_native_richness_4 = std.error(change_native_richness_4),
+            median_change_native_richness_4 = median(change_native_richness_4),
+            mean_change_nonnative_richness_1 = mean(change_nonnative_richness_1),
+            se_nonnative_richness_1 = std.error(change_nonnative_richness_1),
+            median_change_nonnative_richness_1 = median(change_nonnative_richness_1),
+            mean_change_nonnative_richness_2 = mean(change_nonnative_richness_2),
+            se_nonnative_richness_2 = std.error(change_nonnative_richness_2),
+            median_change_nonnative_richness_2 = median(change_nonnative_richness_2),
+            mean_change_nonnative_richness_3 = mean(change_nonnative_richness_3),
+            se_nonnative_richness_3 = std.error(change_nonnative_richness_3),
+            median_change_nonnative_richness_3 = median(change_nonnative_richness_3),
+            mean_change_nonnative_richness_4 = mean(change_nonnative_richness_4),
+            se_nonnative_richness_4 = std.error(change_nonnative_richness_4),
+            median_change_nonnative_richness_4 = median(change_nonnative_richness_4),
+            mean_change_thatch_pc_1 = mean(change_thatch_pc_1),
+            se_thatch_pc_1 = std.error(change_thatch_pc_1),
+            median_change_thatch_pc_1 = median(change_thatch_pc_1),
+            mean_change_thatch_pc_2 = mean(change_thatch_pc_2),
+            se_thatch_pc_2 = std.error(change_thatch_pc_2),
+            median_change_thatch_pc_2 = median(change_thatch_pc_2),
+            mean_change_thatch_pc_3 = mean(change_thatch_pc_3),
+            se_thatch_pc_3 = std.error(change_thatch_pc_3),
+            median_change_thatch_pc_3 = median(change_thatch_pc_3),
+            mean_change_thatch_pc_4 = mean(change_thatch_pc_4),
+            se_thatch_pc_4 = std.error(change_thatch_pc_4),
+            median_change_thatch_pc_4 = median(change_thatch_pc_4),
+            mean_change_thatch_depth_1 = mean(change_thatch_depth_1),
+            se_thatch_depth_1 = std.error(change_thatch_depth_1),
+            median_change_thatch_depth_1 = median(change_thatch_depth_1),
+            mean_change_thatch_depth_2 = mean(change_thatch_depth_2),
+            se_thatch_depth_2 = std.error(change_thatch_depth_2),
+            median_change_thatch_depth_2 = median(change_thatch_depth_2),
+            mean_change_thatch_depth_3 = mean(change_thatch_depth_3),
+            se_thatch_depth_3 = std.error(change_thatch_depth_3),
+            median_change_thatch_depth_3 = median(change_thatch_depth_3),
+            mean_change_thatch_depth_4 = mean(change_thatch_depth_4),
+            se_thatch_depth_4 = std.error(change_thatch_depth_4),
+            median_change_thatch_depth_4 = median(change_thatch_depth_4),
+            mean_change_bg_1 = mean(change_bg_1),
+            se_bg_1 = std.error(change_bg_1),
+            median_change_bg_1 = median(change_bg_1),
+            mean_change_bg_2 = mean(change_bg_2),
+            se_bg_2 = std.error(change_bg_2),
+            median_change_bg_2 = median(change_bg_2),
+            mean_change_bg_3 = mean(change_bg_3),
+            se_bg_3 = std.error(change_bg_3),
+            median_change_bg_3 = median(change_bg_3),
+            mean_change_bg_4 = mean(change_bg_4),
+            se_bg_4 = std.error(change_bg_4),
+            median_change_bg_4 = median(change_bg_4))
+
+
+
+
+
+
+
+
+### Summary of change stats, by year & treatment & seeded
+change_summary_seeded_19_23 <- change_richness_thatch_bg_pc_19_23 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(mean_change_native_pc_1 = mean(change_native_pc_1),
+            se_native_pc_1 = std.error(change_native_pc_1),
+            median_change_native_pc_1 = median(change_native_pc_1),
+            mean_change_native_pc_2 = mean(change_native_pc_2),
+            se_native_pc_2 = std.error(change_native_pc_2),
+            median_change_native_pc_2 = median(change_native_pc_2),
+            mean_change_native_pc_3 = mean(change_native_pc_3),
+            se_native_pc_3 = std.error(change_native_pc_3),
+            median_change_native_pc_3 = median(change_native_pc_3),
+            mean_change_native_pc_4 = mean(change_native_pc_4),
+            se_native_pc_4 = std.error(change_native_pc_4),
+            median_change_native_pc_4 = median(change_native_pc_4),
+            mean_change_nonnative_pc_1 = mean(change_nonnative_pc_1),
+            se_nonnative_pc_1 = std.error(change_nonnative_pc_1),
+            median_change_nonnative_pc_1 = median(change_nonnative_pc_1),
+            mean_change_nonnative_pc_2 = mean(change_nonnative_pc_2),
+            se_nonnative_pc_2 = std.error(change_nonnative_pc_2),
+            median_change_nonnative_richness_2 = median(change_nonnative_pc_2),
+            mean_change_nonnative_pc_3 = mean(change_nonnative_pc_3),
+            se_nonnative_pc_3 = std.error(change_nonnative_pc_3),
+            median_change_nonnative_richness_3 = median(change_nonnative_pc_3),
+            mean_change_nonnative_pc_4 = mean(change_nonnative_pc_4),
+            se_nonnative_pc_4 = std.error(change_nonnative_pc_4),
+            median_change_nonnative_richness_4 = median(change_nonnative_pc_4),
+            mean_change_native_richness_1 = mean(change_native_richness_1),
+            se_native_richness_1 = std.error(change_native_richness_1),
+            median_change_native_richness_1 = median(change_native_richness_1),
+            mean_change_native_richness_2 = mean(change_native_richness_2),
+            se_native_richness_2 = std.error(change_native_richness_2),
+            median_change_native_richness_2 = median(change_native_richness_2),
+            mean_change_native_richness_3 = mean(change_native_richness_3),
+            se_native_richness_3 = std.error(change_native_richness_3),
+            median_change_native_richness_3 = median(change_native_richness_3),
+            mean_change_native_richness_4 = mean(change_native_richness_4),
+            se_native_richness_4 = std.error(change_native_richness_4),
+            median_change_native_richness_4 = median(change_native_richness_4),
+            mean_change_nonnative_richness_1 = mean(change_nonnative_richness_1),
+            se_nonnative_richness_1 = std.error(change_nonnative_richness_1),
+            median_change_nonnative_richness_1 = median(change_nonnative_richness_1),
+            mean_change_nonnative_richness_2 = mean(change_nonnative_richness_2),
+            se_nonnative_richness_2 = std.error(change_nonnative_richness_2),
+            median_change_nonnative_richness_2 = median(change_nonnative_richness_2),
+            mean_change_nonnative_richness_3 = mean(change_nonnative_richness_3),
+            se_nonnative_richness_3 = std.error(change_nonnative_richness_3),
+            median_change_nonnative_richness_3 = median(change_nonnative_richness_3),
+            mean_change_nonnative_richness_4 = mean(change_nonnative_richness_4),
+            se_nonnative_richness_4 = std.error(change_nonnative_richness_4),
+            median_change_nonnative_richness_4 = median(change_nonnative_richness_4),
+            mean_change_thatch_pc_1 = mean(change_thatch_pc_1),
+            se_thatch_pc_1 = std.error(change_thatch_pc_1),
+            median_change_thatch_pc_1 = median(change_thatch_pc_1),
+            mean_change_thatch_pc_2 = mean(change_thatch_pc_2),
+            se_thatch_pc_2 = std.error(change_thatch_pc_2),
+            median_change_thatch_pc_2 = median(change_thatch_pc_2),
+            mean_change_thatch_pc_3 = mean(change_thatch_pc_3),
+            se_thatch_pc_3 = std.error(change_thatch_pc_3),
+            median_change_thatch_pc_3 = median(change_thatch_pc_3),
+            mean_change_thatch_pc_4 = mean(change_thatch_pc_4),
+            se_thatch_pc_4 = std.error(change_thatch_pc_4),
+            median_change_thatch_pc_4 = median(change_thatch_pc_4),
+            mean_change_thatch_depth_1 = mean(change_thatch_depth_1),
+            se_thatch_depth_1 = std.error(change_thatch_depth_1),
+            median_change_thatch_depth_1 = median(change_thatch_depth_1),
+            mean_change_thatch_depth_2 = mean(change_thatch_depth_2),
+            se_thatch_depth_2 = std.error(change_thatch_depth_2),
+            median_change_thatch_depth_2 = median(change_thatch_depth_2),
+            mean_change_thatch_depth_3 = mean(change_thatch_depth_3),
+            se_thatch_depth_3 = std.error(change_thatch_depth_3),
+            median_change_thatch_depth_3 = median(change_thatch_depth_3),
+            mean_change_thatch_depth_4 = mean(change_thatch_depth_4),
+            se_thatch_depth_4 = std.error(change_thatch_depth_4),
+            median_change_thatch_depth_4 = median(change_thatch_depth_4),
+            mean_change_bg_1 = mean(change_bg_1),
+            se_bg_1 = std.error(change_bg_1),
+            median_change_bg_1 = median(change_bg_1),
+            mean_change_bg_2 = mean(change_bg_2),
+            se_bg_2 = std.error(change_bg_2),
+            median_change_bg_2 = median(change_bg_2),
+            mean_change_bg_3 = mean(change_bg_3),
+            se_bg_3 = std.error(change_bg_3),
+            median_change_bg_3 = median(change_bg_3),
+            mean_change_bg_4 = mean(change_bg_4),
+            se_bg_4 = std.error(change_bg_4),
+            median_change_bg_4 = median(change_bg_4))
+
+
+
+
+
+## Column graph of change in bare ground
+change_bg_19_22_col <- change_summary_19_22 %>% 
+  select(treatment, mean_change_bg_1, mean_change_bg_2, mean_change_bg_3, se_bg_1, se_bg_2, se_bg_3) %>% 
+  pivot_longer(2:4, names_to = "treatment_year", values_to = "mean_bg") %>% 
+  pivot_longer(2:4, names_to = "treatment_year.2", values_to = "se_bg") %>% 
+  add_column(x = c(1:27)) %>% #arbitrary label
+  filter(x == 1 | x == 6 | x == 9 | x == 10 | x == 14 | x == 18 | x == 19 | x == 23 | x == 27) %>%  #retain only pairings of mean and se from the same treatment year
+  ggplot(aes(x = treatment, stat = "identity", group = treatment_year)) +
+  geom_col(aes(x = treatment, y = mean_bg, fill = treatment_year), , position = position_dodge2(), width = 0.3) +
+  geom_errorbar(aes(x = treatment, ymin = mean_bg-se_bg, ymax = mean_bg+se_bg), width = 0.3, position = position_dodge2()) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in bare ground after three years of treatments", x = "Treatment", y = "Absolute Change in Percent Cover (%)", caption = "Tukey", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22) +
+  scale_fill_manual(values = c("grey", "lightblue1", "lightblue2"), name = "Treatment Year", label = c("1", "2", "3"))
+change_bg_19_22_col
+
+
+### LMER of bare ground
+change_bg_19_23_lmer <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, treatment, seeded, change_bg_1, change_bg_2, change_bg_3, change_bg_4) %>% 
+  pivot_longer(4:7, names_to = "treatment_year", values_to = "change_bg") %>% 
+  lmer(change_bg ~ treatment_year + treatment + seeded + treatment_year:treatment + treatment_year:seeded + seeded:treatment +  (1|quadrat_id), data = .)
+#summary(change_bg_19_23_lmer)
+#tab_model(change_bg_19_23_lmer, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(change_bg_19_23_lmer)
+#F1 <- fitted(change_bg_19_23_lmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(change_bg_19_23_lmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(change_bg_19_23_lmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+change_bg_19_23_lmer_tukey <- emmeans(change_bg_19_23_lmer, list(pairwise ~ treatment*seeded|treatment_year), adjust = "tukey")
+#yr1: Control < Removal p = 0.0031 (BUT ONLY control/no < removal/no p = 0.0234; removal still higher but not sig); Disturbance < Removal p < 0.0001 (p < 0.001 w/ interactions)
+#yr2: Control < Removal p < 0.0001; Disturbance < Removal p < 0.0001
+#yr3: Control < Removal p = 0.0009 (p < 0.05 w/ interactions -- EXCEPT removal/yes > control/no not sig); Disturbance < Removal p = 0.0001 (EXCEPT removal/yes < disturbance/no not sig)
+#yr4: Control > Removal p = 0.0031; Disturbance > Removal p < 0.0001
+
+
+
+## Column graph of change in thatch pc
+change_thatch_pc_19_22_col <- change_summary_19_22 %>% 
+  select(treatment, mean_change_thatch_pc_1, mean_change_thatch_pc_2, mean_change_thatch_pc_3, se_thatch_pc_1, se_thatch_pc_2, se_thatch_pc_3) %>% 
+  pivot_longer(2:4, names_to = "treatment_year", values_to = "mean_thatch_pc") %>% 
+  pivot_longer(2:4, names_to = "treatment_year.2", values_to = "se_thatch_pc") %>% 
+  add_column(x = c(1:27)) %>% #arbitrary label
+  filter(x == 1 | x == 5 | x == 9 | x == 10 | x == 14 | x == 18 | x == 19 | x == 23 | x == 27) %>%  #retain only pairings of mean and se from the same treatment year
+  ggplot(aes(x = treatment, stat = "identity", group = treatment_year)) +
+  geom_col(aes(x = treatment, y = mean_thatch_pc, fill = treatment_year), , position = position_dodge2(), width = 0.3) +
+  geom_errorbar(aes(x = treatment, ymin = mean_thatch_pc-se_thatch_pc, ymax = mean_thatch_pc+se_thatch_pc), width = 0.3, position = position_dodge2()) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in thatch cover after three years of treatments", x = "Treatment", y = "Absolute Change in Percent Cover (%)", caption = "Tukey", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22) +
+  scale_fill_manual(values = c("darkgoldenrod2", "darkgoldenrod3", "darkgoldenrod4"), name = "Treatment Year", label = c("1", "2","3"))
+change_thatch_pc_19_22_col
+
+### LMER of thatch cover
+change_thatch_pc_19_23_lmer <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, treatment, seeded, change_thatch_pc_1, change_thatch_pc_2, change_thatch_pc_3, change_thatch_pc_4) %>% 
+  pivot_longer(4:7, names_to = "treatment_year", values_to = "change_thatch_pc") %>% 
+  lmer(change_thatch_pc ~ treatment_year + treatment + seeded + treatment_year:treatment + treatment_year:seeded + seeded:treatment +  (1|quadrat_id), data = .)
+#summary(change_thatch_pc_19_23_lmer)
+#tab_model(change_thatch_pc_19_23_lmer, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(change_thatch_pc_19_23_lmer)
+#F1 <- fitted(change_thatch_pc_19_23_lmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(change_thatch_pc_19_23_lmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(change_thatch_pc_19_23_lmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+change_thatch_pc_19_23_lmer_tukey <- emmeans(change_thatch_pc_19_23_lmer, list(pairwise ~ treatment*seeded|treatment_year), adjust = "tukey")
+#yr1: Control > Removal p < 0.001; Disturbance > Removal p < 0.0001
+#yr2: no sig diff
+#yr3: Control > Removal p = 0.0083 (BUT ONLY control/yes > removal/yes sig); Disturbance > Removal p = 0.0095 (BUT none sig w/ interaction)
+#yr4: no sig diff
+
+
+## Column graph of change in thatch depth
+change_thatch_depth_19_22_col <- change_summary_19_22 %>% 
+  select(treatment, mean_change_thatch_depth_1, mean_change_thatch_depth_2, mean_change_thatch_depth_3, se_thatch_depth_1, se_thatch_depth_2, se_thatch_depth_3) %>% 
+  pivot_longer(2:4, names_to = "treatment_year", values_to = "mean_thatch_depth") %>% 
+  pivot_longer(2:4, names_to = "treatment_year.2", values_to = "se_thatch_depth") %>% 
+  add_column(x = c(1:27)) %>% #arbitrary label
+  filter(x == 1 | x == 5 | x == 9 | x == 10 | x == 14 | x == 18 | x == 19 | x == 23 | x == 27) %>%  #retain only pairings of mean and se from the same treatment year
+  ggplot(aes(x = treatment, stat = "identity", group = treatment_year)) +
+  geom_col(aes(x = treatment, y = mean_thatch_depth, fill = treatment_year), , position = position_dodge2(), width = 0.3) +
+  geom_errorbar(aes(x = treatment, ymin = mean_thatch_depth-se_thatch_depth, ymax = mean_thatch_depth+se_thatch_depth), width = 0.3, position = position_dodge2()) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in thatch depth after three years of treatments", x = "Treatment", y = "Absolute Change in Depth (cm)", caption = "Tukey", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22) +
+  scale_fill_manual(values = c("darkgoldenrod2", "darkgoldenrod3", "darkgoldenrod4"), name = "Treatment Year", label = c("1", "2", "3"))
+change_thatch_depth_19_22_col
+
+### LMER of thatch depth
+change_thatch_depth_19_23_lmer <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, treatment, seeded, change_thatch_depth_1, change_thatch_depth_2, change_thatch_depth_3, change_thatch_depth_4) %>% 
+  pivot_longer(4:7, names_to = "treatment_year", values_to = "change_thatch_depth") %>% 
+  lmer(change_thatch_depth ~ treatment_year + treatment + seeded + treatment_year:treatment + treatment_year:seeded + seeded:treatment +  (1|quadrat_id), data = .)
+#summary(change_thatch_depth_19_23_lmer)
+#tab_model(change_thatch_depth_19_23_lmer, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(change_thatch_depth_19_23_lmer)
+#F1 <- fitted(change_thatch_depth_19_23_lmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(change_thatch_depth_19_23_lmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(change_thatch_depth_19_23_lmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+change_thatch_depth_19_23_lmer_tukey <- emmeans(change_thatch_depth_19_23_lmer, list(pairwise ~ treatment*seeded|treatment_year), adjust = "tukey")
+#yr1: Control > Removal p < 0.0001; Disturbance > Removal p < 0.0001
+#yr2: Control > Disturbance p < 0.0001 (control/yes > disturbance/yes p = 0.0011; control/yes > disturbance/no p = 0.0040; disturbance/yes < control/no p = 0.0250, control/no > disturbance/no p = 0.0010); Control < Removal p = 0.0013 (control/yes < removal/no p = 0.0317, control/no < removal/no p = 0.0130; EXCEPT control/yes < removal/no, removal/yes > control/no); Disturbance < Removal p < 0.0001
+#yr3: Control > Removal p = 0.0299 (EXCEPT none sig w/ interaction)
+#yr4: Control < Removal p < 0.001; Disturbance < Removal p = 0.0001 (p < 0.05 w/ interaction)
+
+
+
+
+## Boxplot of change in native percent cover
+change_native_pc_19_22_box <- change_richness_thatch_bg_pc_19_22 %>%
+  select(quadrat_id, treatment, change_native_pc_1, change_native_pc_2, change_native_pc_3) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "change_native_pc") %>% 
+  ggplot() +
+  geom_boxplot(aes(x = treatment, y = change_native_pc, fill = treatment_year)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in native cover after three years of treatments", x = "Treatment", y = "Absolute Change in Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(name = "Treatment Year", values = c("chartreuse2", "chartreuse3", "chartreuse4"), label = c(1, 2, 3)) +
+  theme_classic(base_size = 22)
+change_native_pc_19_22_box
+
+### LMER of native cover
+change_native_pc_19_23_lmer <- change_richness_thatch_bg_pc_19_23 %>% 
+  select(quadrat_id, treatment, seeded, change_native_pc_1, change_native_pc_2, change_native_pc_3, change_native_pc_4) %>% 
+  pivot_longer(4:7, names_to = "treatment_year", values_to = "change_native_pc") %>% 
+  lmer(change_native_pc ~ treatment_year + treatment + seeded + treatment_year:treatment + treatment_year:seeded + seeded:treatment +  (1|quadrat_id), data = .)
+#summary(change_native_pc_19_23_lmer)
+#tab_model(change_native_pc_19_23_lmer, transform = NULL)
+
+#### Check diagnostic graphs
+#E1 <- resid(change_native_pc_19_23_lmer)
+#F1 <- fitted(change_native_pc_19_23_lmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(change_native_pc_19_23_lmer)$quadrat_id[,1], main = "random effect Quadrat ID Residuals")
+#qqline(ranef(change_native_pc_19_23_lmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### Tukey's post-hoc of least-squares means
+change_native_pc_19_23_lmer_tukey <- emmeans(change_native_pc_19_23_lmer, list(pairwise ~ treatment*seeded|treatment_year), adjust = "tukey")
+#yr1: Disturbance > Removal (BUT none sig w/ interaction)
+#yr2: no sig diff
+#yr3: no sig diff
+#yr4: Control < Removal p = 0.0004 (control/yes < removal/yes p = 0.0008; removal/yes > control/no p = 0.0007; EXCEPT control/yes < removal/no, control/no < removal/no); Disturbance < Removal p < 0.0001 (p < 0.007 w/ interactions EXCEPT disturbance/yes < removal/no)
+
+
+
+
+## Boxplot of change in nonnative percent cover
+change_nonnative_pc_19_22_box <- change_richness_thatch_bg_pc_19_22 %>%
+  select(quadrat_id, treatment, seeded, change_nonnative_pc_1, change_nonnative_pc_2, change_nonnative_pc_3) %>% 
+  pivot_longer(4:6, names_to = "treatment_year", values_to = "change_nonnative_pc") %>% 
+  ggplot() +
+  geom_boxplot(aes(x = treatment, y = change_nonnative_pc, fill = treatment_year)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in nonnative cover after three years of treatments", x = "Treatment", y = "Absolute Change in Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_manual(name = "Treatment Year", values = c("firebrick2", "firebrick3", "firebrick4"), label = c(1, 2, 3)) +
+  theme_classic(base_size = 22)
+change_nonnative_pc_19_22_box
+
+
+### GLMER
+change_nonnative_pc_glmer <- change_richness_thatch_bg_pc_19_22 %>%
+  select(quadrat_id, treatment, seeded, change_nonnative_pc_1, change_nonnative_pc_2, change_nonnative_pc_3) %>% 
+  pivot_longer(4:6, names_to = "treatment_year", values_to = "change_nonnative_pc") %>% 
+  glmer(change_nonnative_pc+128 ~ treatment_year + treatment + seeded + treatment_year:treatment + treatment_year:seeded + seeded:treatment + (1|quadrat_id), family = Gamma(link = "log"), data = .)
+#summary(change_nonnative_pc_glmer)
+#2, 2:removal sig
+
+#### Check diagnostic graphs
+#E1 <- resid(change_nonnative_pc_glmer)
+#F1 <- fitted(change_nonnative_pc_glmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#qqnorm(ranef(change_nonnative_pc_glmer)$quadrat_id[,1], main = "Quadrat ID Residuals")
+#qqline(ranef(change_nonnative_pc_glmer)$quadrat_id[,1]) #run 2 lines together -- assess if random effects residuals are normal
+
+
+#### ANOVA of GLMER
+change_nonnative_pc_glmer_anova <- anova(change_nonnative_pc_glmer)
+#### Tukey's post-hoc of least-squares means
+change_nonnative_pc_tukey <- emmeans(change_nonnative_pc_glmer, list(pairwise ~ treatment_year*treatment), adjust = "tukey")
+#plot(change_nonnative_pc_tukey, comparisons = TRUE, xlab = "")
+
+
+
+
+
+## Column graph of change in native richness, by treatment
+change_native_richness_19_22_col <- change_summary_19_22 %>% 
+  select(treatment, mean_change_native_richness_1, mean_change_native_richness_2, mean_change_native_richness_3, se_native_richness_1, se_native_richness_2, se_native_richness_3) %>% 
+  pivot_longer(2:4, names_to = "treatment_year", values_to = "mean_native_richness") %>% 
+  pivot_longer(2:4, names_to = "treatment_year.2", values_to = "se_native_richness") %>% 
+  add_column(x = c(1:27)) %>% #arbitrary label
+  filter(x == 1 | x == 5 | x == 9 | x == 10 | x == 14 | x == 18 | x == 19 | x == 23 | x == 27) %>%  #retain only pairings of mean and se from the same treatment year
+  ggplot(aes(x = treatment, stat = "identity", group = treatment_year)) +
+  geom_col(aes(x = treatment, y = mean_native_richness, fill = treatment_year), , position = position_dodge2(), width = 0.3) +
+  geom_errorbar(aes(x = treatment, ymin = mean_native_richness-se_native_richness, ymax = mean_native_richness+se_native_richness), width = 0.3, position = position_dodge2()) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in native richness after three years of treatments", x = "Treatment", y = "Absolute Change in Species Richness", caption = "Tukey)", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22) +
+  scale_fill_manual(values = c("chartreuse2", "chartreuse3", "chartreuse4"), name = "Treatment Year", label = c("1", "2", "3"))
+change_native_richness_19_22_col
+
+### ANOVA
+change_native_richness_19_22_anova <- change_richness_thatch_bg_pc_19_22 %>% 
+  select(quadrat_id, treatment, seeded, change_native_richness_1, change_native_richness_2, change_native_richness_3) %>% 
+  pivot_longer(4:6, names_to = "treatment_year", values_to = "change_native_richness") %>% 
+  aov(change_native_richness ~ treatment + treatment_year + seeded + treatment*treatment_year + seeded*treatment_year + seeded*treatment, data = .)
+#summary(change_native_richness_19_22_anova)
+#treatment, year, treatment*year, year*seeded sig
+### Tukey's post-hoc
+change_native_richness_19_22_tukey <- TukeyHSD(change_native_richness_19_22_anova)
+#removal-control, removal-disturbance sig
+#2-3, seeded sig
+#change_native_richness_19_22_tukey <- emmeans(change_native_richness_19_22_anova, list(pairwise ~ treatment_year*treatment*seeded), adjust = "tukey")
+#plot(change_native_richness_19_22_tukey, comparisons = TRUE)
+
+
+
+
+
+## Column graph of change in native richness, by seeding treatment
+change_native_richness_seeding_19_22_col <- change_summary_seeded_19_22 %>% 
+  select(treatment, seeded, mean_change_native_richness_1, mean_change_native_richness_2, mean_change_native_richness_3, se_native_richness_1, se_native_richness_2, se_native_richness_3) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "mean_native_richness") %>% 
+  pivot_longer(3:5, names_to = "treatment_year.2", values_to = "se_native_richness") %>% 
+  add_column(x = c(1:54)) %>% #arbitrary label
+  filter(x == 1 | x == 5 | x == 9 | x == 10 | x == 14 | x == 18 | x == 19 | x == 23 | x == 27 | x == 28 | x == 32 | x == 36 | x == 37 | x == 41 | x == 45 | x == 46 | x == 50 | x == 54) %>%  #retain only pairings of mean and se from the same treatment year
+  ggplot(aes(x = seeded, stat = "identity", group = treatment_year)) +
+  geom_col(aes(x = seeded, y = mean_native_richness, fill = treatment_year), , position = position_dodge2(), width = 0.3) +
+  geom_errorbar(aes(x = seeded, ymin = mean_native_richness-se_native_richness, ymax = mean_native_richness+se_native_richness), width = 0.3, position = position_dodge2()) + 
+  facet_wrap(~treatment) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in native richness after three years of treatments", x = "Treatment", y = "Absolute Change in Species Richness", caption = ")", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_fill_manual(values = c("chartreuse2", "chartreuse3", "chartreuse4"), name = "Treatment Year", label = c("1", "2", "3"))
+change_native_richness_seeding_19_22_col
+
+
+
+
+
+
+
+
+## Column graph of change in nonnative richness
+change_nonnative_richness_19_22_col <- change_summary_19_22 %>% 
+  select(treatment, mean_change_nonnative_richness_1, mean_change_nonnative_richness_2, mean_change_nonnative_richness_3, se_nonnative_richness_1, se_nonnative_richness_2, se_nonnative_richness_3) %>% 
+  pivot_longer(2:4, names_to = "treatment_year", values_to = "mean_nonnative_richness") %>% 
+  pivot_longer(2:4, names_to = "treatment_year.2", values_to = "se_nonnative_richness") %>% 
+  add_column(x = c(1:27)) %>% #arbitrary label
+  filter(x == 1 | x == 5 | x == 9 | x == 10 | x == 14 | x == 18 | x == 19 | x == 23 | x == 27) %>%  #retain only pairings of mean and se from the same treatment year
+  ggplot(aes(x = treatment, stat = "identity", group = treatment_year)) +
+  geom_col(aes(x = treatment, y = mean_nonnative_richness, fill = treatment_year), , position = position_dodge2(), width = 0.3) +
+  geom_errorbar(aes(x = treatment, ymin = mean_nonnative_richness-se_nonnative_richness, ymax = mean_nonnative_richness+se_nonnative_richness), width = 0.3, position = position_dodge2()) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Change in nonnnative richness after three years of treatments", x = "Treatment", y = "Absolute Change in Species Richness", caption = "Tukey", size = 5) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic(base_size = 22) +
+  scale_fill_manual(values = c("firebrick2", "firebrick3", "firebrick4"), name = "Treatment Year", label = c("1", "2", "3"))
+change_nonnative_richness_19_22_col
+
+### ANOVA
+change_nonnative_richness_19_22_anova <- change_richness_thatch_bg_pc_19_22 %>% 
+  select(quadrat_id, treatment, seeded, change_nonnative_richness_1, change_nonnative_richness_2, change_nonnative_richness_3) %>% 
+  pivot_longer(4:6, names_to = "treatment_year", values_to = "change_nonnative_richness") %>% 
+  aov(change_nonnative_richness ~ treatment + treatment_year + seeded + treatment*treatment_year + seeded*treatment_year + seeded*treatment, data = .)
+#summary(change_nonnative_richness_19_22_anova)
+#year, treatment*year sig
+### Tukey's post-hoc
+change_nonnative_richness_19_22_tukey <- TukeyHSD(change_nonnative_richness_19_22_anova)
+#removal-control, removal-disturbance sig
+#1-2, 1-3 sig
+#change_nonnative_richness_19_22_tukey <- emmeans(change_nonnative_richness_19_22_anova, list(pairwise ~ treatment_year*treatment), adjust = "tukey")
+#plot(change_nonnative_richness_19_22_tukey, comparisons = TRUE)
+
+
+
+
+
+```
+
+# Line graphs over time
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Line graphs over time
+
+# Dataframe of median, max, min of % cover, richnesses
+pc_19_22_pc_richness_median <- pc_19_22_totals %>% 
+  group_by(treatment, seeded, native_status, year) %>% 
+  summarize(median_pc = median(sum_of_cover),
+            min_pc = min(sum_of_cover),
+            max_pc = max(sum_of_cover),
+            median_richness = median(species_richness),
+            min_richness = min(species_richness),
+            max_richness = max(species_richness),
+            median_thatch_pc = median(percent_thatch),
+            min_thatch_pc = min(percent_thatch),
+            max_thatch_pc = max(percent_thatch),
+            median_thatch_depth = median(thatch_depth),
+            min_thatch_depth = min(thatch_depth),
+            max_thatch_depth = max(thatch_depth),
+            median_bg = median(percent_bare_ground),
+            min_bg = min(percent_bare_ground),
+            max_bg = max(percent_bare_ground))
+
+# Median line of total native and nonnative percent cover, by year
+cover_19_22_line <- ggplot(stat = "identity", group = treatment) +
+  geom_jitter(data = pc_19_22_totals, aes(x = (year), y = sum_of_cover, color = treatment, shape = treatment), position = position_dodge(width = 0.5), size = 2) +
+  geom_line(data = pc_19_22_pc_richness_median, aes(x = year, y = median_pc, color = treatment), position = position_dodge(width = 0.5)) +
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Species cover after third year of treatments", x = "Year", y = "Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 200)) +
+  scale_x_continuous(breaks = c(2019, 2020, 2021, 2022)) +
+  theme_classic(base_size = 20) +
+  scale_color_manual(values = c("black", "chocolate", "firebrick4"), name = "Treatment") +
+  scale_shape_manual(values = c(18, 7, 5), name = "Treatment")
+cover_19_22_line
+
+
+# Median line of total native and nonnative richness, by year
+richness_19_22_line <- ggplot(stat = "identity", group = treatment) +
+  geom_jitter(data = pc_19_22_totals, aes(x = (year), y = species_richness, color = treatment, shape = treatment), position = position_dodge(width = 0.5), size = 2) +
+  geom_line(data = pc_19_22_pc_richness_median, aes(x = year, y = median_richness, color = treatment), position = position_dodge(width = 0.5)) +
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Species richness after third year of treatments", x = "Year", y = "Richness", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 12)) +
+  scale_x_continuous(breaks = c(2019, 2020, 2021, 2022)) +
+  theme_classic(base_size = 20) +
+  scale_color_manual(values = c("black", "chocolate", "firebrick4"), name = "Treatment") +
+  scale_shape_manual(values = c(18, 7, 5), name = "Treatment")
+richness_19_22_line
+
+
+# Median line of thatch pc, by year
+thatch_pc_19_22_line <- ggplot(stat = "identity", group = treatment) +
+  geom_jitter(data = pc_19_22_totals, aes(x = (year), y = (percent_thatch), color = treatment, shape = treatment), position = position_dodge(width = 0.5), size = 2) +
+  geom_line(data = pc_19_22_pc_richness_median, aes(x = year, y = median_thatch_pc, color = treatment), position = position_dodge(width = 0.5)) +
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Thatch cover after third year of treatments", x = "Year", y = "Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 100)) +
+  scale_x_continuous(breaks = c(2019, 2020, 2021, 2022)) +
+  theme_classic(base_size = 20) +
+  scale_color_manual(values = c("black", "chocolate", "firebrick4"), name = "Treatment") +
+  scale_shape_manual(values = c(18, 7, 5), name = "Treatment")
+thatch_pc_19_22_line
+
+
+# Median line of thatch depth, by year
+thatch_depth_19_22_line <- ggplot(stat = "identity", group = treatment) +
+  geom_jitter(data = pc_19_22_totals, aes(x = (year), y = (thatch_depth), color = treatment, shape = treatment), position = position_dodge(width = 0.5), size = 2) +
+  geom_line(data = pc_19_22_pc_richness_median, aes(x = year, y = median_thatch_depth, color = treatment), position = position_dodge(width = 0.5)) +
+  facet_grid(vars(native_status), vars(seeded)) +
+  labs(title = "Thatch depth after third year of treatments", x = "Year", y = "Thatch Depth (cm)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 6.2)) +
+  scale_x_continuous(breaks = c(2019, 2020, 2021, 2022)) +
+  theme_classic(base_size = 20) +
+  scale_color_manual(values = c("black", "chocolate", "firebrick4"), name = "Treatment") +
+  scale_shape_manual(values = c(18, 7, 5), name = "Treatment")
+thatch_depth_19_22_line
+
+
+# Median line of bare ground, by year
+bg_19_22_line <- ggplot(stat = "identity", group = treatment) +
+  geom_jitter(data = pc_19_22_totals, aes(x = (year), y = (percent_bare_ground), color = treatment, shape = treatment), position = position_dodge(width = 0.5), size = 2) +
+  geom_line(data = pc_19_22_pc_richness_median, aes(x = year, y = median_bg, color = treatment), position = position_dodge(width = 0.5)) +
+  facet_wrap(~seeded) +
+  labs(title = "Bare ground after third year of treatments", x = "Year", y = "Bare Ground (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 100)) +
+  scale_x_continuous(breaks = c(2019, 2020, 2021, 2022)) +
+  theme_classic(base_size = 20) +
+  scale_color_manual(values = c("black", "chocolate", "firebrick4"), name = "Treatment") +
+  scale_shape_manual(values = c(18, 7, 5), name = "Treatment")
+bg_19_22_line
+
+
+
+
+```
+
+# Line graphs of change over time
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Line graphs of change over time
+
+# Dataframe of median, max, min change % cover
+max_change_native_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_native_pc_1 = max(change_native_pc_1),
+            max_change_native_pc_2 = max(change_native_pc_2),
+            max_change_native_pc_3 = max(change_native_pc_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_native_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_native_pc_1" ~ "1", treatment_year == "max_change_native_pc_2" ~ "2", treatment_year == "max_change_native_pc_3" ~ "3"))
+max_change_nonnative_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_nonnative_pc_1 = max(change_nonnative_pc_1),
+            max_change_nonnative_pc_2 = max(change_nonnative_pc_2),
+            max_change_nonnative_pc_3 = max(change_nonnative_pc_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_nonnative_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_nonnative_pc_1" ~ "1", treatment_year == "max_change_nonnative_pc_2" ~ "2", treatment_year == "max_change_nonnative_pc_3" ~ "3"))
+max_change_native_richness_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_native_richness_1 = max(change_native_richness_1),
+            max_change_native_richness_2 = max(change_native_richness_2),
+            max_change_native_richness_3 = max(change_native_richness_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_native_richness") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_native_richness_1" ~ "1", treatment_year == "max_change_native_richness_2" ~ "2", treatment_year == "max_change_native_richness_3" ~ "3"))
+max_change_nonnative_richness_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_nonnative_richness_1 = max(change_nonnative_richness_1),
+            max_change_nonnative_richness_2 = max(change_nonnative_richness_2),
+            max_change_nonnative_richness_3 = max(change_nonnative_richness_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_nonnative_richness") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_nonnative_richness_1" ~ "1", treatment_year == "max_change_nonnative_richness_2" ~ "2", treatment_year == "max_change_nonnative_richness_3" ~ "3"))
+max_change_thatch_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_thatch_pc_1 = max(change_thatch_pc_1),
+            max_change_thatch_pc_2 = max(change_thatch_pc_2),
+            max_change_thatch_pc_3 = max(change_thatch_pc_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_thatch_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_thatch_pc_1" ~ "1", treatment_year == "max_change_thatch_pc_2" ~ "2", treatment_year == "max_change_thatch_pc_3" ~ "3"))
+max_change_thatch_depth_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_thatch_depth_1 = max(change_thatch_depth_1),
+            max_change_thatch_depth_2 = max(change_thatch_depth_2),
+            max_change_thatch_depth_3 = max(change_thatch_depth_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_thatch_depth") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_thatch_depth_1" ~ "1", treatment_year == "max_change_thatch_depth_2" ~ "2", treatment_year == "max_change_thatch_depth_3" ~ "3"))
+max_change_bg_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(max_change_bg_1 = max(change_bg_1),
+            max_change_bg_2 = max(change_bg_2),
+            max_change_bg_3 = max(change_bg_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "max_change_bg") %>% 
+  mutate(treatment_year = case_when(treatment_year == "max_change_bg_1" ~ "1", treatment_year == "max_change_bg_2" ~ "2", treatment_year == "max_change_bg_3" ~ "3"))
+ min_change_native_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_native_pc_1 = min(change_native_pc_1),
+            min_change_native_pc_2 = min(change_native_pc_2),
+            min_change_native_pc_3 = min(change_native_pc_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_native_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_native_pc_1" ~ "1", treatment_year == "min_change_native_pc_2" ~ "2", treatment_year == "min_change_native_pc_3" ~ "3"))
+min_change_nonnative_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_nonnative_pc_1 = min(change_nonnative_pc_1),
+            min_change_nonnative_pc_2 = min(change_nonnative_pc_2),
+            min_change_nonnative_pc_3 = min(change_nonnative_pc_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_nonnative_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_nonnative_pc_1" ~ "1", treatment_year == "min_change_nonnative_pc_2" ~ "2", treatment_year == "min_change_nonnative_pc_3" ~ "3"))
+min_change_native_richness_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_native_richness_1 = min(change_native_richness_1),
+            min_change_native_richness_2 = min(change_native_richness_2),
+            min_change_native_richness_3 = min(change_native_richness_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_native_richness") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_native_richness_1" ~ "1", treatment_year == "min_change_native_richness_2" ~ "2", treatment_year == "min_change_native_richness_3" ~ "3"))
+min_change_nonnative_richness_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_nonnative_richness_1 = min(change_nonnative_richness_1),
+            min_change_nonnative_richness_2 = min(change_nonnative_richness_2),
+            min_change_nonnative_richness_3 = min(change_nonnative_richness_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_nonnative_richness") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_nonnative_richness_1" ~ "1", treatment_year == "min_change_nonnative_richness_2" ~ "2", treatment_year == "min_change_nonnative_richness_3" ~ "3"))
+min_change_thatch_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_thatch_pc_1 = min(change_thatch_pc_1),
+            min_change_thatch_pc_2 = min(change_thatch_pc_2),
+            min_change_thatch_pc_3 = min(change_thatch_pc_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_thatch_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_thatch_pc_1" ~ "1", treatment_year == "min_change_thatch_pc_2" ~ "2", treatment_year == "min_change_thatch_pc_3" ~ "3"))
+min_change_thatch_depth_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_thatch_depth_1 = min(change_thatch_depth_1),
+            min_change_thatch_depth_2 = min(change_thatch_depth_2),
+            min_change_thatch_depth_3 = min(change_thatch_depth_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_thatch_depth") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_thatch_depth_1" ~ "1", treatment_year == "min_change_thatch_depth_2" ~ "2", treatment_year == "min_change_thatch_depth_3" ~ "3"))
+min_change_bg_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(min_change_bg_1 = min(change_bg_1),
+            min_change_bg_2 = min(change_bg_2),
+            min_change_bg_3 = min(change_bg_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "min_change_bg") %>% 
+  mutate(treatment_year = case_when(treatment_year == "min_change_bg_1" ~ "1", treatment_year == "min_change_bg_2" ~ "2", treatment_year == "min_change_bg_3" ~ "3"))
+median_change_native_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_native_pc_1 = median(change_native_pc_1),
+            median_change_native_pc_2 = median(change_native_pc_2),
+            median_change_native_pc_3 = median(change_native_pc_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_native_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_native_pc_1" ~ "1", treatment_year == "median_change_native_pc_2" ~ "2", treatment_year == "median_change_native_pc_3" ~ "3"))
+median_change_nonnative_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_nonnative_pc_1 = median(change_nonnative_pc_1),
+            median_change_nonnative_pc_2 = median(change_nonnative_pc_2),
+            median_change_nonnative_pc_3 = median(change_nonnative_pc_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_nonnative_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_nonnative_pc_1" ~ "1", treatment_year == "median_change_nonnative_pc_2" ~ "2", treatment_year == "median_change_nonnative_pc_3" ~ "3"))
+median_change_native_richness_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_native_richness_1 = median(change_native_richness_1),
+            median_change_native_richness_2 = median(change_native_richness_2),
+            median_change_native_richness_3 = median(change_native_richness_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_native_richness") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_native_richness_1" ~ "1", treatment_year == "median_change_native_richness_2" ~ "2", treatment_year == "median_change_native_richness_3" ~ "3"))
+median_change_nonnative_richness_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_nonnative_richness_1 = median(change_nonnative_richness_1),
+            median_change_nonnative_richness_2 = median(change_nonnative_richness_2),
+            median_change_nonnative_richness_3 = median(change_nonnative_richness_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_nonnative_richness") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_nonnative_richness_1" ~ "1", treatment_year == "median_change_nonnative_richness_2" ~ "2", treatment_year == "median_change_nonnative_richness_3" ~ "3"))
+median_change_thatch_pc_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_thatch_pc_1 = median(change_thatch_pc_1),
+            median_change_thatch_pc_2 = median(change_thatch_pc_2),
+            median_change_thatch_pc_3 = median(change_thatch_pc_3)) %>%
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_thatch_pc") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_thatch_pc_1" ~ "1", treatment_year == "median_change_thatch_pc_2" ~ "2", treatment_year == "median_change_thatch_pc_3" ~ "3"))
+median_change_thatch_depth_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_thatch_depth_1 = median(change_thatch_depth_1),
+            median_change_thatch_depth_2 = median(change_thatch_depth_2),
+            median_change_thatch_depth_3 = median(change_thatch_depth_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_thatch_depth") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_thatch_depth_1" ~ "1", treatment_year == "median_change_thatch_depth_2" ~ "2", treatment_year == "median_change_thatch_depth_3" ~ "3"))
+median_change_bg_19_22 <- change_richness_thatch_bg_pc_19_22 %>% 
+  group_by(treatment, seeded) %>% 
+  summarize(median_change_bg_1 = median(change_bg_1),
+            median_change_bg_2 = median(change_bg_2),
+            median_change_bg_3 = median(change_bg_3)) %>% 
+  pivot_longer(3:5, names_to = "treatment_year", values_to = "median_change_bg") %>% 
+  mutate(treatment_year = case_when(treatment_year == "median_change_bg_1" ~ "1", treatment_year == "median_change_bg_2" ~ "2", treatment_year == "median_change_bg_3" ~ "3"))
+change_pc_richness_19_22_median <- full_join(max_change_native_pc_19_22, max_change_nonnative_pc_19_22) %>% 
+  full_join(max_change_native_richness_19_22) %>% 
+  full_join(max_change_nonnative_richness_19_22) %>% 
+  full_join(max_change_thatch_pc_19_22) %>% 
+  full_join(max_change_thatch_depth_19_22) %>% 
+  full_join(max_change_bg_19_22) %>% 
+  full_join(min_change_native_pc_19_22) %>% 
+  full_join(min_change_nonnative_pc_19_22) %>% 
+  full_join(min_change_native_richness_19_22) %>% 
+  full_join(min_change_nonnative_richness_19_22) %>% 
+  full_join(min_change_thatch_pc_19_22) %>% 
+  full_join(min_change_thatch_depth_19_22) %>% 
+  full_join(min_change_bg_19_22) %>% 
+  full_join(median_change_native_pc_19_22) %>% 
+  full_join(median_change_nonnative_pc_19_22) %>% 
+  full_join(median_change_native_richness_19_22) %>% 
+  full_join(median_change_nonnative_richness_19_22) %>% 
+  full_join(median_change_thatch_pc_19_22) %>% 
+  full_join(median_change_thatch_depth_19_22) %>% 
+  full_join(median_change_bg_19_22) %>% 
+  mutate(treatment_year = as.numeric(treatment_year))
+
+# Median line of change in native percent cover, by year
+change_native_pc_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_native_pc), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_native_pc, ymax = max_change_native_pc, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in native species cover after third year of treatments", x = "Year", y = "Change in Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-140, 30)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_native_pc_19_22_line
+
+# Median line of change in nonnative percent cover, by year
+change_nonnative_pc_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_nonnative_pc), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_nonnative_pc, ymax = max_change_nonnative_pc, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in nonnative species cover after third year of treatments", x = "Year", y = "Change in Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-120, 100)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_nonnative_pc_19_22_line
+
+
+
+# Median line of change in native richness, by year
+change_native_richness_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_native_richness), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_native_richness, ymax = max_change_native_richness, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in native richness  after third year of treatments", x = "Year", y = "Change in Richness", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-6, 7)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_native_richness_19_22_line
+
+# Median line of change in nonnative richness, by year
+change_nonnative_richness_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_nonnative_richness), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_nonnative_richness, ymax = max_change_nonnative_richness, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in nonnative richness after third year of treatments", x = "Year", y = "Change in Richness", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-7, 8)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_nonnative_richness_19_22_line
+
+
+
+# Median line of change in thatch cover, by year
+change_thatch_pc_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_thatch_pc), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_thatch_pc, ymax = max_change_thatch_pc, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in thatch cover after third year of treatments", x = "Year", y = "Change in Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-100, 100)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_thatch_pc_19_22_line
+
+
+
+# Median line of change in thatch depth, by year
+change_thatch_depth_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_thatch_depth), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_thatch_depth, ymax = max_change_thatch_depth, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in thatch depth after third year of treatments", x = "Year", y = "Change in Thatch Depth (cm)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-6, 3)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_thatch_depth_19_22_line
+
+
+
+# Median line of change in bare ground cover, by year
+change_bg_19_22_line <- change_pc_richness_19_22_median %>% 
+  ggplot(aes(x = (treatment_year), y = median_change_bg), stat = "identity", group = treatment) +
+  geom_line(aes(color = treatment), position = position_dodge(width = 0.5)) +
+  geom_point(aes(color = treatment), position = position_dodge(width = 0.5), size = 5) +
+  geom_errorbar(aes(ymin = min_change_bg, ymax = max_change_bg, color = treatment), width = 0.3, position = position_dodge(width = 0.5)) + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~seeded) +
+  labs(title = "Absolute change in bare ground cover after third year of treatments", x = "Year", y = "Change in Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(-100, 100)) +
+  scale_x_continuous(breaks = c(1, 2, 3)) +
+  theme_classic() +
+  scale_color_manual(values = c("black", "purple", "chocolate"), name = "Treatment")
+change_bg_19_22_line
+
+```
+
+
+# NMDS
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# NMDS
+
+## eDNA species presence/absence
+edna_presence <- edna %>% 
+  select(quadrat_id, genus_species) %>% 
+  mutate(quadrat_id = gsub("-", "", quadrat_id)) %>% 
+  add_column(presence = 1) %>% 
+  distinct() %>% 
+  dplyr::rename(species = "genus_species") %>% 
+  mutate(quadrat_id_year = paste(quadrat_id, "edna", sep = "-")) %>% 
+  select(-quadrat_id)
+
+
+## Cover community matrix
+pc_community_matrix <- pc_19_23 %>% 
+  mutate(quadrat_id_year = paste(quadrat_id, year, sep = "-")) %>% 
+  filter(species != "NA") %>% 
+  group_by(quadrat_id_year, quadrat_id, pool_id, year, treatment, seeded, species) %>% 
+  summarize(pc = mean(percent_cover)) %>% 
+  pivot_wider(names_from = species, values_from = pc) %>% 
+  mutate_all(funs(replace_na(.,0))) %>% 
+  column_to_rownames("quadrat_id_year") %>% 
+  select(6:71)
+
+## Cover community matrix variables
+pc_community_matrix_variables <- pc_19_23 %>% 
+  filter(species != "NA") %>%
+  mutate(quadrat_id_year = paste(quadrat_id, year, sep = "-")) %>% 
+  group_by(quadrat_id_year, quadrat_id, pool_id, year, treatment, seeded, species) %>% 
+  summarize(pc = mean(percent_cover)) %>% 
+  select(1:6) %>% 
+  distinct() %>% 
+  mutate(both_treatments = paste(treatment, seeded, sep = "_")) %>% 
+  mutate(treatment_year = paste(treatment, year, sep = "_")) %>% 
+  mutate(seeded_year = paste(seeded, year, sep = "_")) %>% 
+  mutate(both_treatments_year = paste(treatment, seeded, year, sep = "_"))
+
+## Cover & eDNA presence/absence community matrix
+presence_community_matrix <- pc_19_23 %>% 
+  select(quadrat_id, year, species, percent_cover) %>% 
+  mutate(quadrat_id_year = paste(quadrat_id, year, sep = "-")) %>% 
+  mutate(percent_cover = case_when(percent_cover >0 ~ 1, percent_cover == 0 ~ 0)) %>% 
+  group_by(quadrat_id_year, species) %>% 
+  summarize(presence = mean(percent_cover)) %>% #there were double records for Juncus bufonius & Festuca perennis 4E3-2023; 3T6-2019; Plantago lanceolata 5T1-2022
+  full_join(edna_presence) %>% 
+  pivot_wider(names_from = species, values_from = presence) %>% 
+  mutate_all(funs(replace_na(.,0))) %>% 
+  column_to_rownames("quadrat_id_year")
+
+## eDNA community matrix variables
+presence_community_matrix_variables <- pc_19_23 %>% 
+  mutate(quadrat_id_year = paste(quadrat_id, year, sep = "-")) %>% 
+  mutate(percent_cover = case_when(percent_cover >0 ~ 1, percent_cover == 0 ~ 0)) %>% 
+  group_by(quadrat_id_year, year, species) %>% 
+  summarize(presence = mean(percent_cover)) %>% #there were double records for Juncus bufonius & Festuca perennis 4E3-2023; 3T6-2019; Plantago lanceolata 5T1-2022
+  full_join(edna_presence) %>% 
+  pivot_wider(names_from = species, values_from = presence) %>% 
+  mutate(year = as.character(year)) %>% 
+  select(1:2) %>% 
+  mutate(year = replace_na(year, "edna"))
+
+
+## Cover NMDS
+pc_nmds <- metaMDS(pc_community_matrix, trymax = 100, maxit = 999)
+#stressplot(pc_nmds)
+#Generally, an average stress of > 0.2 is an indication that the ordination didn’t do a good job of representing community structure. However, NMDS stress increases as sample size increases, so if you have many samples (as this dataset does) your ordination will likely exhibit a lot of stress
+#stress = 0.24
+
+pc_nmds_loadings <- as.data.frame(pc_nmds$species) #how much each species contributes to each axis
+indicator_species_analysis <- as.data.frame((indval(pc_community_matrix, pc_community_matrix_variables$treatment_year)$indval))
+#Top 5 species 2019:
+#Control: LYHY, ELMA, AVFA, FEPE, ERBO
+#Disturbance: FEPE, ELAC, AVFA, LYHY, ERBO
+#Removal: AVFA, ERVA, FEPE, VIVI
+#Top 5 species 2020:
+#Control: FEPE, AVFA, ERBO, FEBR, BRHO
+#Disturbance: FEPE, ERBO, BRHO, GEDI, FEBR
+#Removal: FEPE, ERBO, AVFA, POMO, ERBO
+#Top 5 species 2021:
+#Control: BRDI, AVFA, ERBO, COAR, PLLA
+#Disturbance: BRDI, AMPS, DISP, RUAC, ERBO
+#Removal: BRDI, ERBO, GRCA, PLLA, BRHO
+#Top 5 species 2022:
+#Control: BRDI, ERBO, Sonchus, PLLA, GRCA
+#Disturbance: BRDI, Sonchus, ERBO, LYAR, VIVI
+#Removal: Spergularia, GRCA, ERBO, PLLA, BRDI
+#Top 5 species 2023:
+#Control: HYGL, ELMA, HOMA, LYHY, JUBU
+#Disturbance: FEPE, JUBU, LYHY, PHLE
+#Removal: JUBU, LYHY, GAPH, LYMI, CETE
+
+pc_nmds_scores <- vegan::scores(pc_nmds, display = "sites") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("quadrat_id_year") %>% 
+  full_join(pc_community_matrix_variables)
+
+pc_nmds_fit <- envfit(pc_nmds, pc_community_matrix, perm = 999) #envfit() takes the output of metaMDS() and the species matrix you created
+
+pc_nmds_fit_pvals <- pc_nmds_fit$vectors$pvals %>% 
+  as.data.frame() %>% 
+  rownames_to_column("species") %>% 
+  dplyr::rename("pvals" = ".") #extract p-values for each species
+
+pc_nmds_fit_coords <- pc_nmds_fit %>% 
+  vegan::scores(., display = "vectors") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("species") %>% 
+  full_join(., pc_nmds_fit_pvals, by = "species") %>% 
+  filter(pvals <= 0.001) #extract coordinates for species, only keep species with p-val <= 0.0001
+
+envfit <- envfit(pc_nmds, pc_community_matrix_variables, permutations = 999) # this fits environmental vectors
+env_scores <- as.data.frame(vegan::scores(envfit, display = "vectors")) #extracts relevant scores from envifit; only retains continuous variables (so you would need 1 graph per treatment to see the effect of year)
+env_scores <- cbind(env_scores, pc_community_matrix_variables = rownames(env_scores)) #and then gives them their names
+env_scores <- cbind(env_scores, pval = envfit$vectors$pvals) # add pvalues to dataframe
+sig_env_scores <- subset(env_scores, pval<=0.05) #subset data to show variables significant at 0.05
+
+### NMDS biplot, by year
+pc_nmds_year_treatment_biplot <- pc_nmds_scores %>% 
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  coord_fixed() +
+  geom_point(aes(color = as.factor(treatment_year)), alpha = 0.6) +
+  stat_ellipse(aes(color = as.factor(treatment_year))) +
+  geom_segment(data = env_scores, aes(x = 0, xend=NMDS1, y=0, yend=NMDS2), arrow = arrow(length = unit(0.25, "cm")), colour = "grey10", lwd=0.3) + #add vector arrows of significant env variables
+  ggrepel::geom_text_repel(data = env_scores, aes(x=NMDS1, y=NMDS2, label = pc_community_matrix_variables), cex = 4, direction = "both", segment.size = 0.25)+ #add labels for env variables
+    scale_color_manual(values = c("grey28", "cyan4", "chartreuse4", "mediumpurple4", "orange4", "grey48", "cyan3", "chartreuse3", "mediumpurple3", "orange3", "grey68", "cyan2", "chartreuse2", "mediumpurple2", "orange2"), name = "Thatch Treatment and Year") +
+  theme_classic(base_size = 20) +
+  labs(title = "NMDS, by year and thatch treatment", caption = "all pairwise years sig p = 0.01; \n no treatments sig diff")
+pc_nmds_year_treatment_biplot
+
+### NMDS biplot, by year-treatment
+pc_nmds_year_species_biplot <- pc_nmds_scores %>% 
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  coord_fixed() +
+  geom_point(aes(color = as.factor(treatment_year))) +
+  stat_ellipse(aes(color = as.factor(treatment_year))) +
+  geom_segment(data = pc_nmds_fit_coords, aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")),
+               col = "black") +
+  geom_text(data = pc_nmds_fit_coords, aes(label = species), size = 2) +
+  theme_classic() +
+  labs(title = "NMDS, by year and thatch treatment", caption = "all pairwise years sig p = 0.01; \n no treatments sig diff") +
+  scale_color_manual(values = c("grey28", "cyan4", "chartreuse4", "mediumpurple4", "orange4", "grey48", "cyan3", "chartreuse3", "mediumpurple3", "orange3", "grey68", "cyan2", "chartreuse2", "mediumpurple2", "orange2"))
+pc_nmds_year_species_biplot
+
+####perMANOVA, by pool
+#pc_nmds_pool_permanova <- adonis2(pc_community_matrix ~ pool_id, data = pc_community_matrix_variables)
+#F(14) = 10.749, p = 0.001
+#####Post-hoc test
+#pc_nmds_pool_pairwise <- pairwise.adonis(pc_community_matrix, pc_community_matrix_variables$pool_id)
+#no pairwise comparisons sig
+
+####perMANOVA, by year
+#pc_nmds_year_permanova <- adonis2(pc_community_matrix ~ year, data = pc_community_matrix_variables)
+#F(15) = 58.775, p = 0.001
+#####Post-hoc test
+#pc_nmds_year_pairwise <- pairwise.adonis(pc_community_matrix, pc_community_matrix_variables$year)
+#all pairwise sig p = 0.01
+
+####perMANOVA, by seeding treatment-year
+#pc_nmds_seeded_year_permanova <- adonis2(pc_community_matrix ~ seeded_year, data = pc_community_matrix_variables)
+#F(2) = 33.702, p = 0.001
+#####Post-hoc test
+#pc_nmds_treatment_pairwise <- pairwise.adonis(pc_community_matrix, pc_community_matrix_variables$seeded_year)
+#addition plots: 2020-2021 p = 0.045, 2020-2022 p = 0.045, 2020-2023 p = 0.045, 2021-2023 p = 0.045, 2021-2022 p = 0.045, 2022-2023 p = 0.045
+#no addition plots: 2019-2020 p = 0.045, 2019-2021 p = 0.045, 2019-2022 p = 0.045; 2020-2021  p = 0.045; 2020-2022 p = 0.045, 2020-2023 p = 0.045; 2021-2022 p = 0.045; 2021-2023 p = 0.045; 2022-2023 p = 0.045
+#no sig diff b/t addition vs. no addition plots w/in each year
+
+####perMANOVA, by treatment-year
+#pc_nmds_treatment_year_permanova <- adonis2(pc_community_matrix ~ treatment_year, data = pc_community_matrix_variables)
+#F(14) = 24.306, p = 0.001
+#####Post-hoc test
+#pc_nmds_treatment_year_pairwise <- pairwise.adonis(pc_community_matrix, pc_community_matrix_variables$treatment_year)
+#no pairwise comparisons sig
+
+####perMANOVA, by seeding and thatch treatments
+#pc_nmds_both_treatments_permanova <- adonis2(pc_community_matrix ~ both_treatments, data = pc_community_matrix_variables)
+#F(15) = 3.8688, p = 0.001
+#####Post-hoc test
+#pc_nmds_both_treatments_pairwise <- pairwise.adonis(pc_community_matrix, pc_community_matrix_variables$both_treatments)
+#control/yes-disturbance-no p = 0.030; control/yes-removal/yes p = 0.015; control/no-disturbance/yes p = 0.030; control/no-removal/yes p = 0.015; disturbance/no-removal/no p = 0.045; disturbance/no-removal/yes p = 0.015; disturbance/yes-removal/no p = 0.015; disturbance/yes-removal/yes p - 0.15
+
+####perMANOVA, by seeding and thatch treatments per year
+#pc_nmds_both_treatments_year_permanova <- adonis2(pc_community_matrix ~ both_treatments_year, data = pc_community_matrix_variables)
+#F(15) = 12.54, p = 0.001
+#####Post-hoc test
+#pc_nmds_both_treatments_pairwise <- pairwise.adonis(pc_community_matrix, pc_community_matrix_variables$both_treatments_year)
+#no pairwise comparisons sig
+
+
+## NMDS w/ presence/absence eDNA data
+presence_nmds <- metaMDS(presence_community_matrix, trymax = 100, maxit = 999)
+#stressplot(presence_nmds)
+#Generally, an average stress of > 0.2 is an indication that the ordination didn’t do a good job of representing community structure. However, NMDS stress increases as sample size increases, so if you have many samples (as this dataset does) your ordination will likely exhibit a lot of stress
+#stress = 0.0012
+
+presence_nmds_scores <- vegan::scores(presence_nmds, display = "sites") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("quadrat_id_year") %>% 
+  full_join(presence_community_matrix_variables)
+
+presence_nmds_fit <- envfit(presence_nmds, presence_community_matrix, perm = 999) #envfit() takes the output of metaMDS() and the species matrix you created
+
+presence_nmds_fit_pvals <- presence_nmds_fit$vectors$pvals %>% 
+  as.data.frame() %>% 
+  rownames_to_column("species") %>% 
+  dplyr::rename("pvals" = ".") #extract p-values for each species
+
+presence_nmds_fit_coords <- presence_nmds_fit %>% 
+  vegan::scores(., display = "vectors") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("species") %>% 
+  full_join(., presence_nmds_fit_pvals, by = "species") %>% 
+  filter(pvals <= 0.001) #extract coordinates for species, only keep species with p-val <= 0.0001
+
+### NMDS biplot, by year
+presence_nmds_year_species_biplot <- presence_nmds_scores %>% 
+  ggplot(aes(x = NMDS1, y = NMDS2)) +
+  coord_fixed() +
+  geom_point(aes(color = year)) +
+  stat_ellipse(aes(color = year)) +
+  geom_segment(data = presence_nmds_fit_coords, aes(x = 0, xend = NMDS1, y = 0, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")),
+               col = "black") +
+  geom_text(data = presence_nmds_fit_coords, aes(label = species)) +
+  theme_classic() +
+  labs(title = "NMDS, by year", caption = "all pairwise permANOVA sig diff")
+presence_nmds_year_species_biplot
+
+####perMANOVA, by year
+#presence_nmds_year_permanova <- adonis2(presence_community_matrix ~ year, data = presence_community_matrix_variables)
+#F(5) = 66.784, p = 0.001
+####Post-hoc test
+#pool_pairwise <- pairwise.adonis(presence_community_matrix, presence_community_matrix_variables$year)
+#all pairwise comparisons sig p = 0.015
+
+```
+
+# Species composition
+```{r  echo = FALSE, warning = FALSE, message = FALSE}
+
+# Simpson's Index
+simpsons_df <- as.data.frame(diversity(pc_community_matrix, "simpson")) %>% 
+  rownames_to_column("quadrat_id_year") %>% 
+  full_join(pc_community_matrix_variables)
+
+##Exploratory graphs
+simpsons_hist <- simpsons_df %>% 
+  ggplot() +
+  geom_histogram(aes(x = diversity(pc_community_matrix, "simpson")))
+#skewed left
+simpsons_qq <- simpsons_df %>% 
+  ggplot() +
+  geom_qq(aes(sample = diversity(pc_community_matrix, "simpson")))
+#skewed left
+
+## GLMER of Simpson's
+simpsons_glmer_beta <- simpsons_df %>% 
+  glmmTMB(diversity(pc_community_matrix, "simpson") ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment + as.factor(year):seeded:treatment + (1|quadrat_id), family = beta_family(), data = .)
+#summary(simpsons_glmer_beta)
+#tab_model(simpsons_glmer_beta, transform = NULL)
+#### Check diagnostic graphs
+#E1 <- resid(simpsons_glmer_beta)
+#F1 <- fitted(simpsons_glmer_beta)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#ranef <- as.data.frame(ranef((simpsons_glmer_beta)))
+#ranef_intercept <- ranef$condval
+#qqnorm(ranef_intercept, main = "Quadrat ID Residuals")
+#qqline(ranef_intercept) #run 2 lines together -- assess if random effects residuals are normal
+simpsons_glmer_beta_tukey <- emmeans(simpsons_glmer_beta, pairwise ~ treatment | as.factor(year), adjust = "tukey")
+#2023: disturbance < control p = 0.0234, disturbance < removal p = 0.0720
+
+### Boxplot of Simpson's Index, by treatment
+simpsons_box <- simpsons_df %>% 
+  full_join(precip) %>% 
+  ggplot(aes(x = as.factor(year), y = diversity(pc_community_matrix, "simpson")), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm/50), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = diversity(pc_community_matrix, "simpson"), fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Shannon's Index", x = "Year", y = "Shannon's Index", caption = "2023: disturbance < control p = 0.0234, disturbance < removal p = 0.0720") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 1.5), sec.axis = sec_axis(~.*50, name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("grey", "orange", "purple"), name = "Treatment") +
+  theme_classic(base_size = 22)
+simpsons_box
+
+
+
+# Shannon's Index
+shannons_df <- as.data.frame(diversity(pc_community_matrix, "shannon")) %>% 
+  rownames_to_column("quadrat_id_year") %>% 
+  full_join(pc_community_matrix_variables)
+
+#Exploratory graphs
+## Exploratory graphs
+shannons_hist <- shannons_df %>% 
+  ggplot() +
+  geom_histogram(aes(x = diversity(pc_community_matrix, "shannon")))
+#normal!
+shannons_qq <- shannons_df %>% 
+  ggplot() +
+  geom_qq(aes(sample = diversity(pc_community_matrix, "shannon")))
+#normal!
+
+## LMER of Shannon's
+shannons_lmer <- shannons_df %>% 
+  lmer(diversity(pc_community_matrix, "shannon") ~ as.factor(year) + treatment + seeded + as.factor(year):treatment + as.factor(year):seeded + seeded:treatment +  (1|quadrat_id), data = .)
+#summary(shannons_lmer)
+#tab_model(shannons_lmer, transform = NULL)
+#### Check diagnostic graphs
+#E1 <- resid(shannons_lmer)
+#F1 <- fitted(shannons_lmer)
+#plot(x=F1, y=E1, xlab="Fitted Model Values", ylab="Pearson Residuals", main="Variance") #run 2 lines together -- assessing homoskedasticity -- you want to see no pattern
+#abline(h=0)
+#qqnorm(E1, ylab="Pearson Residuals")
+#qqline(E1) #run 2 lines together -- assess if model residuals are normally distributed
+#ranef <- as.data.frame(ranef((shannons_lmer)))
+#ranef_intercept <- ranef$condval
+#qqnorm(ranef_intercept, main = "Quadrat ID Residuals")
+#qqline(ranef_intercept) #run 2 lines together -- assess if random effects residuals are normal
+shannons_lmer_tukey <- emmeans(shannons_lmer, pairwise ~ treatment | as.factor(year), adjust = "tukey")
+#2023: disturbance < control p = 0.0048, disturbance < removal p = 0.0476
+#2022: seeded > unseeded p = 0.0303
+
+### Boxplot of Shannon's Index, by treatment
+shannons_box <- shannons_df %>% 
+  full_join(precip) %>% 
+  ggplot(aes(x = as.factor(year), y = diversity(pc_community_matrix, "shannon")), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm/10), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = diversity(pc_community_matrix, "shannon"), fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Shannon's Index", x = "Year", y = "Shannon's Index", caption = "2023: disturbance < control p = 0.0048, disturbance < removal p = 0.0476") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 7.5), sec.axis = sec_axis(~.*10, name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("grey", "orange", "purple"), name = "Treatment") +
+  theme_classic(base_size = 22)
+shannons_box
+
+```
+

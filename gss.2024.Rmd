@@ -1,0 +1,126 @@
+---
+title: "GSS 2024"
+author: "Joanna Tang"
+date: "2024-02-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load packages, read in data
+
+library(janitor)
+library(plotrix)
+library(FSA)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(knitr)
+library(sjPlot)
+library(tidyverse)
+
+percent_cover_19_23_master <- read_csv("Del_Sol_and_Camino_Corto_Permanent_Quadrats_2019_2023.csv", col_types = cols("Pool ID" = col_character(), "Thatch Depth (cm)" = col_double()))
+metadata <- read_csv("metadata.csv") %>% dplyr::select("Quadrat ID", "Treatment", "Seeded")
+```
+
+# Boxplots of thatch cover, bare ground, total native and nonnative percent cover, native richness -- only Thatch Removal vs. Control, only 2019 vs. 2023
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Boxplots of thatch cover, bare ground, total native and nonnative percent cover, native richness
+
+## Clean up data
+pc_19_23_only <- percent_cover_19_23_master %>% 
+  select(-"Treatment") %>% 
+  select(-"Seeded") %>%
+  full_join(metadata, by = "Quadrat ID") %>% 
+  clean_names() %>% 
+  select(pool_id, zone, quadrat_id, quadrat_notes, percent_bare_ground, percent_thatch, thatch_depth_cm, native_species_richness, sum_of_native_cover, nonnative_species_richness, sum_of_nonnative_cover, sum_of_all_cover, year, treatment, seeded, native_status, species, percent_cover) %>% 
+  mutate(treatment = replace(treatment, treatment == 1, "Thatch Removal")) %>% 
+  mutate(treatment = replace(treatment, treatment == 2, "Thatch Disturbance")) %>% 
+  mutate(treatment = replace(treatment, treatment == 3, "Control")) %>% 
+  mutate(seeded = replace(seeded, seeded == 1, "x Native Seed Addition")) %>% 
+  mutate(seeded = replace(seeded, seeded == 0, "  No Seed Addition")) %>% 
+  filter(treatment != "Thatch Disturbance")
+
+## Calculate richness, sums of cover
+pc_19_23_only_totals <- pc_19_23_only %>% 
+  group_by(pool_id, zone, quadrat_id, percent_bare_ground, percent_thatch, thatch_depth_cm, year, treatment, seeded, native_status) %>% 
+  summarize(species_richness = length(species),
+            sum_of_cover = sum(percent_cover)) %>% 
+  mutate(quadrat_id_year = paste(quadrat_id, year, sep = "_"))
+
+# Precipitation data from summer-summer https://www.cnrfc.noaa.gov/rainfall_data.php
+precip <- data.frame(year = c("2019", "2020", "2021", "2022", "2023"),
+                     annual_precip_cm = c("55.6768", "29.3878", "18.5674", "27.0256", "73.533")) %>% 
+  mutate(year = as.numeric(year)) %>% 
+  mutate(annual_precip_cm = as.numeric(annual_precip_cm))
+
+## Boxplot of percent thatch
+thatch_pc_19_23_only_box <- pc_19_23_only_totals %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = as.factor(year), y = percent_thatch), stat = "identity", group = treatment) +
+  geom_boxplot(aes(x = as.factor(year), y = percent_thatch, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Thatch cover after fourth year of treatments", x = "Year", y = "Thatch Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100)) +
+  theme_classic(base_size = 30) +
+  scale_fill_manual(values = c("lightgrey", "purple"), name = "Treatment")
+thatch_pc_19_23_only_box
+
+
+# Boxplot of bare ground
+bg_19_23_only_box <- pc_19_23_only_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = as.factor(year), y = percent_bare_ground), stat = "identity", group = treatment) +
+    geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = percent_bare_ground, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Bare ground after fourth year of treatments", x = "Year", y = "Bare Ground Percent Cover (%)", caption = "") +
+  scale_y_continuous(expand = c(0,0), limits = c(0,100), sec.axis = sec_axis(~., name = "Precipitation (cm)")) +
+  theme_classic(base_size = 25) +
+  scale_fill_manual(values = c("lightgrey", "purple"), name = "Treatment")
+bg_19_23_only_box
+
+# Boxplot of total native percent cover per year & treatment
+native_pc_19_23_only_box <- pc_19_23_only_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "native") %>% 
+  ggplot(aes(x = as.factor(year), y = sum_of_cover), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = sum_of_cover, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Total native cover after fourth year of treatments", x = "Year", y = "Native Percent Cover (%)") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 180), breaks = c(25, 50, 75, 100, 125, 150, 175), sec.axis = sec_axis(~., name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("lightgrey", "purple"), name = "Treatment") +
+  theme_classic(base_size = 30)
+native_pc_19_23_only_box
+
+# Boxplot of total nonnative percent cover per year & treatment
+nonnative_pc_19_23_only_box <- pc_19_23_only_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "nonnative") %>% 
+  ggplot(aes(x = as.factor(year), y = sum_of_cover), stat = "identity", group = treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = sum_of_cover, fill = treatment), position = "dodge", width = .4) +
+  labs(title = "Total nonnative cover after fourth year of treatments", x = "Year", y = "Exotic Percent Cover (%)") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 180), breaks = c(25, 50, 75, 100, 125, 150, 175), sec.axis = sec_axis(~., name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("lightgrey", "purple"), name = "Treatment") +
+  theme_classic(base_size = 30)
+nonnative_pc_19_23_only_box
+
+# Boxplot of native richness, seeded vs. unseeded
+seeded_native_richness_19_23_only_box <- pc_19_23_only_totals %>% 
+  full_join(precip) %>% 
+  filter(native_status == "native") %>% 
+  ggplot(aes(x = as.factor(year), y = species_richness), stat = "identity", group = seeded_treatment) +
+  geom_col(aes(x = as.factor(year), y = annual_precip_cm/10), fill = "lightskyblue1", position = "identity") +
+  geom_boxplot(aes(y = species_richness, fill = seeded), position = "dodge", width = .4) +
+  labs(title = "Native richness after fourth year of treatments", x = "Year", y = "Native Species Richness", caption = ")") +
+  scale_y_continuous(expand = c(0,0), limits = c(0, 13), breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), sec.axis = sec_axis(~.*10, name = "Precipitation (cm)", breaks = c(25, 50, 75, 100, 125, 150, 175))) +
+  scale_fill_manual(values = c("lightgrey", "chartreuse3"), name = "Treatment") +
+  theme_classic(base_size = 25)
+seeded_native_richness_19_23_only_box
+
+
+```
+
